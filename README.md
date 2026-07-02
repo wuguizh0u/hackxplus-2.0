@@ -34,6 +34,8 @@
 
 # hackxplus
 
+*此 skill为 hackprobe skill+hack-skill+本地工具箱+个人二开*（80%）
+
 AI 驱动的黑盒渗透测试框架（Claude Code Skill）。编排 25+ 安全工具 + LLM 推理，覆盖 40+ 漏洞类型。探针扫盲点、AI 做推理、hack-skills 深利用。
 
 ## 目录
