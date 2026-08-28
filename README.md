@@ -1,53 +1,29 @@
 ## **⚠️ 法律与合规声明**
 
-本脚本仅用于授权环境的安全测试、漏洞挖掘与学术研究。使用者须遵守《网络安全法》及相关地方法规，严禁利用本工具进行未授权的网络入侵或数据窃取。因滥用产生的一切法律责任由使用者自行承担。
-
-
+本框架仅用于**授权环境**的安全测试、漏洞挖掘与学术研究。使用者须遵守《网络安全法》及相关地方法规，严禁利用本工具进行未授权的网络入侵或数据窃取。因滥用产生的一切法律责任由使用者自行承担。
 
 ---
 
-### 注意：
-
-### 此skill终究是工具，只能辅助首轮全面辅助进行测试
-
-
-
-### 使用前请先做两件事
-
-**1.安装另一个开源skill**
-
-​	**[yaklang/hack-skills: Helping AI Agent become an awesome practical hacker!](https://github.com/yaklang/hack-skills)**
-
-**并确保放在这个路径  ~/.claude/skills/hack-skills**
-
-**2.设置你本地的工具箱让它识别到**
-
-**HACKPROBE_TOOL_BASE        主工具目录**
-
-**HACKPROBE_TOOLS_ROOT	 其他工具目录**
-
-**没区别 只要设置第一个就可以**
-
-
-
-### 
-
 # hackxplus
 
-AI 驱动的黑盒渗透测试框架（Claude Code Skill + MCP Server 代码层）。编排 25+ 安全工具 + LLM 推理，覆盖 40+ 漏洞类型。探针扫盲点、AI 做推理、hack-skills 深利用。
+**AI 驱动的黑盒渗透测试 Agent 系统**（Claude Code Skill + MCP Server 代码层双层架构）。
+
+编排 25+ 安全工具 + LLM 推理，覆盖 40+ 漏洞类型。从"给一个 URL"到"漏洞报告"全流程自主：侦察 → 漏洞探测 → 深度利用 → 攻击链报告。
+
+> **注意**: skill 入口名 (`name: hackprobe`)、内部函数 (`init_hackprobe_dir`) 沿用历史命名, 项目仓库名为 hackxplus。二者是同一项目。
 
 ## 项目架构（Skill 知识层 × MCP 代码层）
 
-hackxplus 是**双层架构**: 不是纯 prompt 编排, 而是把"决策"与"执行/状态"分离。
+hackxplus 是**双层架构**：不是纯 prompt 编排, 而是把"决策"与"执行/状态"分离。
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Skill 层 (决策知识)   waves/ probes/ infra/   │
+│  Skill 层 (决策知识)   waves/ probes/ infra/  │
 │   · Wave 0-4 分阶段编排 + 双层决策门          │
 │   · 50 探针 + 信号路由 + hack-skills 按需加载  │
 │   · 隐式框架检测 20+ 规则                      │
 └───────────────────┬──────────────────────────┘
-                    │ MCP 工具调用
+                    │ MCP 工具调用 (11 个)
 ┌───────────────────▼──────────────────────────┐
 │  server/ 代码层 (执行 + 管控)  ← ★ 项目化核心  │
 │   · asset_store.py    SQLite 资产库(外部记忆)  │
@@ -56,42 +32,27 @@ hackxplus 是**双层架构**: 不是纯 prompt 编排, 而是把"决策"与"执
 │   · signal_router.py  信号→技能映射(代码化)    │
 │   · browser.py        Playwright 流量/接口发现 │
 │   · runner.py         自动续轮 + 恢复          │
+│   · mcp_server.py     MCP Server 入口 (11 工具)│
 └──────────────────────────────────────────────┘
 ```
 
-**为什么是双层**: 探针是确定性执行(发请求+规则匹配), 不该花 LLM token;
-状态外置到 SQLite(参考文章: 别依赖 Claude Code 自带 compact);
-关键规则在代码层硬控制(五层门禁)而非只靠 prompt 约束。
+**为什么是双层**：
+- **探针是确定性执行**（发请求+规则匹配），不该花 LLM token → 代码化
+- **状态外置到 SQLite**，不依赖对话上下文 → `asset_store.py`
+- **关键规则代码层硬控制**（五层门禁），不靠 prompt 自觉 → `gate_chain.py`
 
-### server/ 快速上手
-
-```bash
-# 1. 依赖
-pip install "mcp[cli]" requests
-# 2. 自测 (不依赖 mcp 库也能跑核心逻辑)
-python server/mcp_server.py --self-test
-# 3. 接入 Claude Code → 见 server/MCP_SETUP.md
-```
-
-接入后暴露 10 个 MCP 工具: `asset_get_asset_tree` / `asset_inject_endpoint` /
-`asset_record_vuln`(触发五层门禁) / `probe_run` / `router_match` /
-`gate_override_check` / `session_checkpoint` / `session_resume` ...
+---
 
 ## 目录
 
-- [项目架构](#项目架构skill-知识层--mcp-代码层)
 - [快速开始](#快速开始)
+- [server/ 代码层](#server-代码层)
 - [架构概览](#架构概览)
 - [安装与依赖](#安装与依赖)
-- [工具发现机制](#工具发现机制)
-- [自定义探针与脚本](#自定义探针与脚本)
-- [探针引擎（48 Probes）](#探针引擎48-probes)
+- [探针引擎](#探针引擎)
 - [hack-skills 生态](#hack-skills-生态)
-- [审计输出与目录结构](#审计输出与目录结构)
-- [实时监控进度](#实时监控进度)
 - [环境变量](#环境变量)
 - [Token 消耗](#token-消耗)
-- [平台兼容性](#平台兼容性)
 - [设计原则](#设计原则)
 - [贡献指南](#贡献指南)
 - [License](#license)
@@ -101,52 +62,87 @@ python server/mcp_server.py --self-test
 ## 快速开始
 
 ```bash
-# 1. 克隆 hackprobe
-git clone https://github.com/your-org/hackprobe.git
-cd hackprobe
+# 1. 克隆本仓库
+git clone https://github.com/wuguizh0u/hackxplus.git
+cd hackxplus
 
 # 2. 克隆 hack-skills（98 个深度利用技能，独立仓库）
-git clone https://github.com/your-org/hack-skills.git ~/.claude/skills/hack-skills
-#    ↑ 放在 ~/.claude/skills/ 下，hackprobe 自动发现。不放这里也行——见下方说明。
+git clone https://github.com/yaklang/hack-skills.git ~/.claude/skills/hack-skills
+#    ↑ 放在 ~/.claude/skills/ 下，框架自动发现
 
 # 3. 安装依赖（一次性）
 bash install.sh
 
 # 4. 注册为 Claude Code Skill
-cp -r . ~/.claude/skills/hackprobe/
+cp -r . ~/.claude/skills/hackxplus/
 
 # 5. 运行
-/hackprobe https://your-target.com
+/hackxplus https://your-target.com
 
 # 快速扫描（仅侦察，跳过深度利用）
 export HACKPROBE_QUICK=1
-/hackprobe https://target.com
+/hackxplus https://target.com
 ```
 
 **前置条件**：Go 1.21+、Python 3、Claude Code CLI。
 
+---
 
+## server/ 代码层
 
-### hack-skills 去哪了？为什么是独立仓库？
+server/ 是 2.0 新增的**工程层**，把 skill 层的关键逻辑从"prompt 约束"升级为"代码实现"。
 
-hackprobe 是**探针引擎 + 调度层**，hack-skills 是**知识层**（98 个漏洞的深度 payload、bypass 矩阵、每种 DBMS/框架的专杀手法）。两者独立发布——你可以只更新 hack-skills 而不动引擎。
-
-**hack-skills 路径查找优先级**（hackprobe 自动按此顺序找）：
-
-```
-1. 环境变量 $HACKPROBE_SKILLS_DIR  （你显式指定）
-2. ./hack-skills/skills/           （hackprobe 目录下的子目录）
-3. ~/.claude/skills/hack-skills/skills/  （默认位置，推荐）
-```
-
-如果你放在其他位置，运行前 export 一下：
+### 快速上手
 
 ```bash
-export HACKPROBE_SKILLS_DIR="/home/me/my-tools/hack-skills/skills"
-/hackprobe https://target.com
+# 1. 依赖（mcp 2.x, requests; playwright 可选）
+pip install "mcp[cli]" requests
+
+# 2. 自测（不依赖 mcp 库也能跑核心逻辑）
+python server/mcp_server.py --self-test
+
+# 3. 接入 Claude Code → 见 server/MCP_SETUP.md
 ```
 
-> 没有 hack-skills 也能跑——Wave 1/2 侦察和 Wave 3 探针照常工作，只是探针命中后没有深度利用技能可加载，报告中会标注 "no hack-skills file"。建议还是下载以获得完整能力。
+### 模块清单
+
+| 模块 | 职责 |
+|---|---|
+| `asset_store.py` | SQLite 资产库: endpoints/coverage/credentials/traffic/vulns/sessions; 资产树 JSON 一次调用恢复全部状态 |
+| `gate_chain.py` | 五层漏洞质量门禁: 垃圾洞拦截/否定检测/低危黑名单/IDOR 危害校验/去重 |
+| `probe_engine.py` | 探针执行引擎: 读 JSON 配置发请求, 结构化输出 probe_hits |
+| `signal_router.py` | 信号→技能映射: 技术栈/攻击面/基础设施/反馈 → 技能加载清单 |
+| `browser.py` | Playwright 封装: 深度探索/流量捕获/接口发现; 无 playwright 降级纯 HTTP |
+| `runner.py` | 自动续轮: 上下文阈值 50% → 新 Session → 从 pending 端点恢复 |
+| `mcp_server.py` | MCP Server 入口: 11 个工具, mcp 2.0 lowlevel API |
+
+### MCP 工具
+
+接入后暴露 11 个 MCP 工具：
+
+| 工具 | 作用 |
+|---|---|
+| `asset_create_target` | 创建目标 (返回 target_id) |
+| `asset_get_asset_tree` | 恢复完整渗透状态 (续轮第一指令) |
+| `asset_inject_endpoint` | 注入新发现的接口 |
+| `asset_annotate_endpoint` | 接口风险标注 |
+| `asset_record_vuln` | 漏洞入库 (触发五层门禁) |
+| `asset_update_coverage` | 更新覆盖矩阵 |
+| `probe_run` | 执行探针 (tier 1/2/3) |
+| `router_match` | 信号→技能映射 |
+| `gate_override_check` | 决策门覆写检测 (单向放宽) |
+| `session_checkpoint` | 写续轮点 |
+| `session_resume` | 恢复 pending 端点 |
+
+### 五层漏洞质量门禁
+
+漏洞入库前强制过 5 层代码门禁，把"宁可错报"的 AI 倾向压到代码层外：
+
+1. **垃圾洞标题拦截** — CORS / 安全头缺失 / Cookie 属性 / 点击劫持
+2. **描述否定检测** — "not a vulnerability" / "expected behavior"
+3. **低价值类型黑名单** — self-xss / sourcemap / version-disclosure
+4. **IDOR 危害校验** — 越权必须证明访问了非授权数据
+5. **相同漏洞去重** — 同端点+同类型只入第一条
 
 ---
 
@@ -184,7 +180,6 @@ Wave 3 → 探针 + 信号路由 + 深度利用（核心）
     ├── 信号→技能路由匹配
     └── 按需加载 hack-skills → 深度利用
     ↓
-    ↓
 Wave 4 → AI 编排报告
     ├── 攻击链关联 + CVSS 评分 + 业务影响
     └── 生成 REPORT.md
@@ -199,7 +194,8 @@ Cleanup → 归档临时文件 + 安全清理
 | Gate 1 | Wave 1 后 | 强 WAF？纯静态站？API/GraphQL？注册入口？高价值子域？ | `_work/shared/decisions/gate1.json` + `gate1.md` |
 | Gate 2 | Wave 2 后 | 新深层资产？弱口令命中？自动注册？WAF 跳过？ | `_work/shared/decisions/gate2.json` + `gate2.md` |
 
-决策门是硬屏障—不通过不进入下一 Wave。
+决策门是硬屏障 — 不通过不进入下一 Wave。
+
 ---
 
 ## 安装与依赖
@@ -222,7 +218,7 @@ bash install.sh
 
 ### 本地工具（需自行获取）
 
-以下工具 hackprobe 会尝试调用，但 `install.sh` 不负责安装：
+以下工具框架会尝试调用，但 `install.sh` 不负责安装：
 
 | 工具 | 用途 | 获取 |
 |------|------|------|
@@ -234,13 +230,13 @@ bash install.sh
 | webpackscan | .map → JS 源码恢复 | 自行搜索 |
 | bypass-403 | 403 绕过工具箱 | 自行搜索 |
 
-> **缺失不报错** — hackprobe 静默降级，curl 手搓替代重型工具。仅关键路径工具缺失时标注。
+> **缺失不报错** — 框架静默降级，curl 手搓替代重型工具。仅关键路径工具缺失时标注。
 
 ---
 
 ## 工具发现机制
 
-`hackprobe` 通过 `scripts/discover_tools.sh` 自动检测已安装的安全工具。
+框架通过 `scripts/discover_tools.sh` 自动检测已安装的安全工具。
 
 ### 默认行为（开箱即用）
 
@@ -296,74 +292,19 @@ cp my-scanner.exe $HACKPROBE_TOOL_BASE
 cp my-scanner /usr/local/bin/
 ```
 
-**方法 3** — 在 `install.sh` 中注册。编辑 `install.sh` 第 191 行的 `TOOLS` 变量，追加工具名。
-
-### 验证工具发现
-
-```bash
-source scripts/discover_tools.sh
-# 输出示例:
-#   ✅  nmap → /usr/bin/nmap
-#   ✅  httpx → /home/user/go/bin/httpx
-#   ⚠️  oneforall not found（非关键，继续）
-```
+**方法 3** — 在 `install.sh` 中注册。编辑 `install.sh` 的 `TOOLS` 变量，追加工具名。
 
 ---
 
-## 自定义探针与脚本
-
-### 添加自定义探针
-
-编辑 `probes/tier2_signal.md`（信号驱动）或 `probes/tier1_universal.md`（通用），按格式追加：
-
-```bash
-### P51. 自定义检查（条件: Django 后端）
-
-# 条件判断（不满足立即返回，不浪费请求）
-if echo "$SIGNALS" | python3 -c "import sys,json;print(json.load(sys.stdin).get('tech',{}).get('framework',''))" 2>/dev/null | grep -qi "django"; then
-  resp=$(curl -sk "${URL}/custom-endpoint/" --max-time 5)
-  echo "$resp" | grep -qi "vulnerable-pattern" && \
-    record_hit "P51" "my-exploit-skill" "Custom vuln: exposed config at ${URL}/custom-endpoint/"
-fi
-```
-
-探针格式要求：条件注释 → 条件判断 → curl 探测 → `record_hit` 记录。
-
-### 内置字典生成器
-
-| 脚本 | 用途 | 示例 |
-|------|------|------|
-| `scripts/gen_custom_dirs.py` | 目标品牌→目录字典 | `python3 scripts/gen_custom_dirs.py "Example Corp" dirs.txt` |
-| `scripts/gen_custom_subdomains.py` | 目标品牌→子域字典 | `python3 scripts/gen_custom_subdomains.py "example" subs.txt` |
-| `scripts/gen_password_dict.py` | 目标画像→密码字典(~200候选) | `python3 scripts/gen_password_dict.py example.com --output pwds.txt` |
-| `scripts/gen_deep_dicts.py` | 深层爆破字典 | `python3 scripts/gen_deep_dicts.py example.com` |
-
-### 添加自定义 Wave / 脚本
-
-在 `waves/` 下新建 `.md` 文件，按 `Preamble → Steps → bash/Python heredoc` 格式。在 `SKILL.md` 入口引用即可。
-
-### 注册自定义 hack-skill
-
-hack-skills 是独立仓库。在 hack-skills 目录的 `skills/` 下创建：
-
-```
-skills/my-exploit/
-└── SKILL.md     # 格式: title → preconditions → payloads → cleanup
-```
-
-Wave 3 的 `signal_router.md` 自动发现新 skill 目录，无需注册到 hackprobe。
-
----
-
-## 探针引擎（48 Probes）
+## 探针引擎
 
 ### 三层懒加载
 
 | Tier | 文件 | 大小 | 何时加载 | 数量 |
 |------|------|------|---------|------|
-| **Tier 1** | `tier1_universal.md` | ~16KB | 永远 | 12（P1-P12.5，无 P9） |
-| **Tier 2** | `tier2_signal.md` | ~33KB | 非静态站 + signals.json 存在 | 36（P13-P50, 缺 P31/P32）|
-| **Tier 3** | `tier3_feedback.md` | ~5KB | 深度利用完成后 | 10 触发规则 |
+| **Tier 1** | `tier1_universal.md` | ~16KB | 永远 | 13（P1-P12.5） |
+| **Tier 2** | `tier2_signal.md` | ~33KB | 非静态站 + signals.json 存在 | 35（P13-P50）|
+| **Tier 3** | `tier3_feedback.md` | ~5KB | 深度利用完成后 | 触发规则 |
 
 静态站仅加载 ~21KB，节省 ~31KB 上下文（~10K tokens）。
 
@@ -394,13 +335,11 @@ Wave 3 的 `signal_router.md` 自动发现新 skill 目录，无需注册到 hac
 - **有登录口** → 密码重置绕过(Host header 投毒)
 - **有支付** → 价格/角色参数篡改
 
-其余 20 个自带条件检查（XXE/LFI/文件上传/GraphQL/子域接管等），不满足立即返回。
+其余探针自带条件检查（XXE/LFI/文件上传/GraphQL/子域接管等），不满足立即返回。
 
 ### Tier 3 — 反馈式
 
 深度利用输出出现新攻击面信号时追加对应技能，最多 1 轮不递归。
-
-
 
 ---
 
@@ -414,7 +353,7 @@ Wave 3 的 `signal_router.md` 自动发现新 skill 目录，无需注册到 hac
 # 推荐：放在默认位置
 git clone https://github.com/yaklang/hack-skills.git
 
-# 或：放在 hackprobe 目录下
+# 或：放在框架目录下
 git clone https://github.com/yaklang/hack-skills.git ./hack-skills
 
 # 或：任意位置 + 环境变量
@@ -422,25 +361,7 @@ git clone https://github.com/yaklang/hack-skills.git /opt/hack-skills
 export HACKPROBE_SKILLS_DIR="/opt/hack-skills/skills"
 ```
 
-### 技能列表
-
-| 类别 | 技能 |
-|------|------|
-| 注入 | sqli, ssti, cmdi, nosql, xslt |
-| 认证 | authbypass, jwt-oauth, oauth2, api-auth |
-| SSRF/LFI | ssrf, path-traversal-lfi, lfi-to-rce |
-| 反序列化 | java-deser, php-deser, ysoserial |
-| CSRF/CORS | csrf, cors, clickjacking |
-| XXE | xxe, xxe-oob |
-| 上传 | upload-insecure, upload-to-rce, svg-exploit |
-| GraphQL/API | graphql, api-bola, api-recon |
-| 缓存/CDN | cache-deception, cache-poisoning, cdn-origin |
-| 业务逻辑 | business-logic, race-condition, payment-bypass |
-| 子域/DNS | subdomain-takeover, dns-rebinding |
-| Email | email-injection, email-spoofing |
-| 客户端 | electron-security, prototype-pollution, android-pentest, ios-pentest |
-
-> 完整列表见 hack-skills 仓库 `skills/` 目录。
+> 没有 hack-skills 也能跑 — Wave 1/2 侦察和 Wave 3 探针照常工作，只是探针命中后没有深度利用技能可加载，报告中会标注 "no hack-skills file"。建议还是下载以获得完整能力。
 
 ---
 
@@ -451,7 +372,8 @@ export HACKPROBE_SKILLS_DIR="/opt/hack-skills/skills"
 ```
 example.com/
 ├── _work/                          ← ❶ 中间数据层
-│   ├── progress.json               │   ├── shared/                     # 共享数据层（merge 后）
+│   ├── progress.json               # 进度
+│   ├── shared/                     # 共享数据层（merge 后）
 │   │   ├── target_profile.json     # Pre-flight 目标画像
 │   │   ├── signals.json            # 信号→技能映射结果
 │   │   ├── httpx.json              # 技术栈指纹
@@ -461,15 +383,12 @@ example.com/
 │   │   ├── oast.json               # OAST 域名状态
 │   │   ├── oast_callbacks.json     # OAST 回调记录
 │   │   ├── probe_hits.json         # 合并后探针命中
-│   │   ├── exploitation_plan.json  # 深度利用清单
 │   │   └── decisions/              # Gate 决策记录(gate1.md/gate2.md)
-│   ├── 04_*.md                     # 深度利用输出（每 skill 一个文件）
 │   └── tmp_archive_*.tar.gz        # 审计结束自动归档
 │
 ├── _audit_log/                     ← ❷ 审计透明日志
 │   ├── heartbeat.log               # 时间线 + 每步状态
 │   ├── agent_logs/                 # 每个 Agent 实时日志
-│   ├── tool_raw/                   # 工具原始输出
 │   └── failures.log                # 失败/超时摘要
 │
 └── _report/                        ← ❸ 最终报告
@@ -484,12 +403,8 @@ example.com/
 # 心跳日志 — 所有 Agent 实时状态
 tail -f example.com/_audit_log/heartbeat.log
 
-# 某个 Agent 详细日志
-cat example.com/_audit_log/agent_logs/3_tier1_probes.log
-
 # 失败摘要
 cat example.com/_audit_log/failures.log
-
 ```
 
 ---
@@ -521,23 +436,14 @@ cat example.com/_audit_log/failures.log
 
 ---
 
-## 平台兼容性
-
-| 平台 | 状态 | 备注 |
-|------|------|------|
-| macOS | ✅ 完整 | Homebrew |
-| Linux | ✅ 完整 | apt/go/pipx |
-| Windows | ✅ 支持 | Git Bash/MSYS2 + 便携工具目录 |
-
----
-
 ## 设计原则
 
-1. **探针贱，技能贵** — 48 探针永远跑，98 hack-skills 命中才加载，未命中零 Token 开销
+1. **探针贱，技能贵** — 探针永远跑，98 hack-skills 命中才加载，未命中零 Token 开销
 2. **信号驱动** — 技术栈信号决定注入/反序列化/框架特定攻击面；隐式框架检测 20+ 规则补 Server 头缺失
 3. **不依赖 Wave 1 完美** — Tier 1 通用探针兜底
 4. **curl 做 99%** — 重型工具（sqlmap/nuclei）只在确认值得用时调用
 5. **共享数据层** — httpx 一次探测，全 Agent 复用，原子 merge 防竞态
+6. **代码层兜底优于 Prompt 约束** — 关键规则（垃圾洞/去重/状态）在代码层硬控制
 
 ### 强制过滤（audit-rules）
 
@@ -547,37 +453,23 @@ cat example.com/_audit_log/failures.log
 
 ## 贡献指南
 
-两个仓库独立维护，请往对应仓库提 PR：
-
 | 想贡献的东西 | 仓库 |
 |-------------|------|
 | 新探针、Wave 逻辑、infra、脚本、README | **hackxplus**（本仓库） |
+| server/ 代码层 (MCP/门禁/探针引擎) | **hackxplus**（本仓库） |
 | 新漏洞深度利用技能、payload 库、bypass 矩阵 | **hack-skills**（独立仓库） |
 
 ### 提交流程
 1. Fork → 分支 → PR
 2. 探针贡献：`probes/tier2_signal.md`（条件驱动）或 `tier1_universal.md`（通用），3-8 行，独立函数，不满足立即 return
-3. hack-skill 贡献：往 hack-skills 仓库提 PR，在 `skills/<name>/SKILL.md`，格式 `title → preconditions → payloads → cleanup`
-4. 脚本贡献：`scripts/`，给可执行权限
-
-### 探针格式
-```bash
-### Pxx. 名称（条件: xxx）
-
-# 条件判断
-[条件不满足] && return
-
-# curl 探测
-resp=$(curl -sk "${URL}/target" --max-time 5)
-echo "$resp" | grep -q "hit-pattern" && \
-  record_hit "Pxx" "skill-name" "evidence"
-```
+3. server 贡献：`server/` 下，带 `--self-test` 自测
+4. hack-skill 贡献：往 hack-skills 仓库提 PR，在 `skills/<name>/SKILL.md`，格式 `title → preconditions → payloads → cleanup`
 
 ---
 
 ## License
 
-MIT © hackprobe contributors
+MIT © hackxplus contributors
 
 ---
 
