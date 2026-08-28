@@ -244,3 +244,37 @@ if [ -n "$MISSING" ]; then
   echo "Re-run the script or install missing tools manually."
   echo "Go tools need network access. Python tools need pipx."
 fi
+
+# ── hackxplus MCP server dependencies (server/ 代码层) ──────────────────────
+echo ""
+echo "=== hackxplus MCP server dependencies ==="
+
+# 核心: asset_store/gate_chain/probe_engine/signal_router/runner 零第三方依赖
+# 仅 mcp 库 (把核心逻辑包成 MCP 工具给 Claude Code 调用) + 可选 requests/playwright
+if python3 -c "import mcp" 2>/dev/null; then
+  echo "  ok  mcp"
+else
+  echo "  Installing mcp (MCP protocol server) ..."
+  python3 -m pip install --user --break-system-packages "mcp[cli]" 2>&1 | tail -1 || true
+fi
+
+if python3 -c "import requests" 2>/dev/null; then
+  echo "  ok  requests"
+else
+  echo "  Installing requests ..."
+  python3 -m pip install --user --break-system-packages requests 2>&1 | tail -1 || true
+fi
+
+# Playwright 可选: 未装则 browser.py 降级纯 HTTP 探测 (不阻塞)
+if python3 -c "import playwright" 2>/dev/null; then
+  echo "  ok  playwright"
+else
+  echo "  [optional] playwright 未安装 — browser.py 将降级为纯 HTTP 探测."
+  echo "  需要浏览器深度探索时:  pip install playwright && playwright install chromium"
+fi
+
+echo ""
+echo "=== hackxplus server 就绪 ==="
+echo "  启动 MCP server:  python3 server/mcp_server.py"
+echo "  核心逻辑自测:     python3 server/mcp_server.py --self-test"
+echo "  (Python 脚本在 server/ 下运行, 资产库默认存 hackxplus.db)"

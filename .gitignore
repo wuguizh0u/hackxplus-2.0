@@ -1,0 +1,25 @@
+# 备份文件
+*.bak
+*.tmp
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 日志和临时数据
+logs/
+*.log
+data/
+temp/
+
+# 本地环境变量（如果 install.sh 会生成）
+.env
+.local
+
+# IDE 配置（个人喜好）
+.vscode/
+.idea/
+# 续轮 checkpoint (运行时生成)
+rounds/
