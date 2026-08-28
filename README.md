@@ -4,7 +4,7 @@
 
 ---
 
-# hackxplus
+# hackxplus 2.0
 
 **AI 驱动的黑盒渗透测试 Agent 系统**（Claude Code Skill + MCP Server 代码层双层架构）。
 
@@ -63,7 +63,7 @@ hackxplus 是**双层架构**：不是纯 prompt 编排, 而是把"决策"与"�
 
 ```bash
 # 1. 克隆本仓库
-git clone https://github.com/wuguizh0u/hackxplus.git
+git clone https://github.com/wuguizh0u/hackxplus-2.0.git
 cd hackxplus
 
 # 2. 克隆 hack-skills（98 个深度利用技能，独立仓库）
