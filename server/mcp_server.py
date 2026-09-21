@@ -127,6 +127,33 @@ class HackXPlusCore:
                                    reason=(reason or None), evidence_ref=evidence_ref)
         return {"ok": True}
 
+    # ── 侦察层情报（hosts / services / findings）────────────────────────────
+    def asset_upsert_host(self, target_id: int, host: str, **fields) -> Dict:
+        """写入/更新一台主机。字段：ip / http_status / https_status / title /
+        tech / server / cdn_waf / cname / is_alive / is_fragile / fragile_reason。"""
+        hid = self.store.upsert_host(target_id, host, **fields)
+        return {"ok": True, "host_id": hid}
+
+    def asset_upsert_service(self, host_id: int, port: int, protocol: str = "tcp",
+                             service: str = "", product: str = "",
+                             version: str = "", banner: str = "") -> Dict:
+        sid = self.store.upsert_service(host_id, port, protocol, service,
+                                        product, version, banner)
+        return {"ok": True, "service_id": sid}
+
+    def asset_add_finding(self, target_id: int, kind: str, title: str,
+                          detail: str = "", severity: str = "info",
+                          evidence: Optional[Dict] = None,
+                          host_id: Optional[int] = None) -> Dict:
+        """记录非漏洞情报（.env 泄露 / JWT / 默认口令 / CVE 命中 / 接管候选…）。
+
+        kind: sensitive_file / jwt_token / default_cred / cve_match /
+              takeover_candidate / api_doc / email_security / exposed_actuator
+        """
+        fid = self.store.add_finding(target_id, kind, title, detail, severity,
+                                     evidence, host_id)
+        return {"ok": True, "finding_id": fid}
+
     def asset_record_chain(self, target_id: int, name: str, narrative: str = "",
                            severity: str = "high", cvss: float = 0.0,
                            steps: Optional[List[Dict]] = None,
@@ -251,6 +278,30 @@ def run_mcp(db_path: str) -> None:
                                          "vuln_type": {"type": "string"}, "status": {"type": "string"},
                                          "reason": {"type": "string"}, "evidence_ref": {"type": "string"}},
                           "required": ["endpoint_id", "vuln_type", "status"]}),
+        Tool(name="asset_upsert_host", description="写入/更新主机资产 (侦察层情报)",
+             inputSchema={"type": "object",
+                          "properties": {"target_id": {"type": "integer"}, "host": {"type": "string"},
+                                         "ip": {"type": "string"}, "http_status": {"type": "integer"},
+                                         "https_status": {"type": "integer"}, "title": {"type": "string"},
+                                         "tech": {"type": "string"}, "server": {"type": "string"},
+                                         "cdn_waf": {"type": "string"}, "cname": {"type": "string"},
+                                         "is_alive": {"type": "boolean"}, "is_fragile": {"type": "boolean"},
+                                         "fragile_reason": {"type": "string"}},
+                          "required": ["target_id", "host"]}),
+        Tool(name="asset_upsert_service", description="写入端口/服务 (CVE 映射的输入)",
+             inputSchema={"type": "object",
+                          "properties": {"host_id": {"type": "integer"}, "port": {"type": "integer"},
+                                         "protocol": {"type": "string"}, "service": {"type": "string"},
+                                         "product": {"type": "string"}, "version": {"type": "string"},
+                                         "banner": {"type": "string"}},
+                          "required": ["host_id", "port"]}),
+        Tool(name="asset_add_finding", description="记录非漏洞情报 (.env/JWT/默认口令/CVE命中)",
+             inputSchema={"type": "object",
+                          "properties": {"target_id": {"type": "integer"}, "kind": {"type": "string"},
+                                         "title": {"type": "string"}, "detail": {"type": "string"},
+                                         "severity": {"type": "string"}, "evidence": {"type": "string"},
+                                         "host_id": {"type": "integer"}},
+                          "required": ["target_id", "kind", "title"]}),
         Tool(name="asset_record_chain", description="记录攻击链 (多低危串成高危)",
              inputSchema={"type": "object",
                           "properties": {"target_id": {"type": "integer"}, "name": {"type": "string"},
@@ -318,6 +369,19 @@ def run_mcp(db_path: str) -> None:
         "asset_update_coverage": lambda a: json.dumps(core.asset_update_coverage(
             int(a["endpoint_id"]), a["vuln_type"], a["status"],
             a.get("reason", ""), a.get("evidence_ref", "")), ensure_ascii=False),
+        "asset_upsert_host": lambda a: json.dumps(core.asset_upsert_host(
+            int(a["target_id"]), a["host"],
+            **{k: (json.loads(a[k]) if k == "tech" and isinstance(a.get(k), str) else v)
+               for k, v in a.items() if k not in ("target_id", "host")}), ensure_ascii=False),
+        "asset_upsert_service": lambda a: json.dumps(core.asset_upsert_service(
+            int(a["host_id"]), int(a["port"]), a.get("protocol", "tcp"),
+            a.get("service", ""), a.get("product", ""), a.get("version", ""),
+            a.get("banner", "")), ensure_ascii=False),
+        "asset_add_finding": lambda a: json.dumps(core.asset_add_finding(
+            int(a["target_id"]), a["kind"], a["title"],
+            a.get("detail", ""), a.get("severity", "info"),
+            json.loads(a.get("evidence") or "{}"),
+            int(a["host_id"]) if a.get("host_id") is not None else None), ensure_ascii=False),
         "asset_record_chain": lambda a: json.dumps(core.asset_record_chain(
             int(a["target_id"]), a["name"], a.get("narrative", ""),
             a.get("severity", "high"), float(a.get("cvss", 0.0)),
@@ -426,15 +490,29 @@ if __name__ == "__main__":
             tid2, "IDOR -> 全量用户", "越权读库", severity="critical", cvss=8.1,
             steps=[{"vuln_id": r.get("vuln_id"), "role": "影响"}]))
 
-        # 两个 target 各看一次：tid 有阻塞原因，tid2 有漏洞+链
+        # 侦察层情报
+        hid = c.asset_upsert_host(tid, "admin.demo.test", ip="1.2.3.4",
+                                  http_status=200, tech=["nginx", "PHP"],
+                                  is_alive=True, is_fragile=True,
+                                  fragile_reason="admin")["host_id"]
+        c.asset_upsert_service(hid, 3306, service="mysql",
+                               product="MySQL", version="5.7.31")
+        c.asset_add_finding(tid, "sensitive_file", ".env 可访问",
+                            "APP_KEY 泄露", severity="high", host_id=hid)
+
+        # 两个 target 各看一次：tid 有阻塞原因+情报，tid2 有漏洞+链
         t1 = c.asset_get_asset_tree(tid)
         print("admin tree stats:", t1["stats"])
         print("admin pending_by_reason:", t1["pending_by_reason"])
+        print("admin hosts(情报):", [(h["host"], h["is_fragile"]) for h in t1["hosts"]])
+        print("admin services:", [(s["port"], s["product"]) for s in t1["services"]])
+        print("admin findings:", [(f["kind"], f["severity"]) for f in t1["findings"]])
 
         t2 = c.asset_get_asset_tree(tid2)
         print("api tree stats:", t2["stats"])
-        print("api hosts:", list(t2["hosts"].keys()))
+        print("api endpoint_groups:", list(t2["endpoint_groups"].keys()))
         print("api chains:", len(t2["chains"]))
+        print("host_stats (Gate1 Q6 输入):", c.store.host_stats(tid))
 
         # 跨 host 续轮队列（阻塞的不该出现）
         q = c.store.next_pending_across_hosts("demo.test", limit=5)

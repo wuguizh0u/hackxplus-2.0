@@ -67,19 +67,29 @@ python3 -m pip install --user playwright && python3 -m playwright install chromi
 
 ## 3. 暴露的工具
 
-| 工具 | 作用 | 续轮/报告用 |
+共 **16 个工具**：
+
+| 工具 | 作用 | 分组 |
 |---|---|---|
-| `asset_create_target` | 创建目标 (返回 target_id) | ✅ |
-| `asset_get_asset_tree` | 恢复完整渗透状态 (续轮第一指令) | ✅ |
-| `asset_inject_endpoint` | 注入新发现的接口 | ✅ |
-| `asset_annotate_endpoint` | 接口风险标注 (risk_tags) | |
-| `asset_record_vuln` | 漏洞入库 (触发五层门禁) | ✅ |
-| `asset_update_coverage` | 更新覆盖矩阵 | ✅ |
-| `probe_run` | 执行探针 (tier 1/2/3) | |
-| `router_match` | 信号→技能映射 | |
-| `gate_override_check` | 决策门覆写检测 (单向放宽) | |
-| `session_checkpoint` | 写续轮点 | ✅ |
-| `session_resume` | 恢复 pending 端点 | ✅ |
+| `asset_create_target` | 创建目标 (返回 target_id) | 目标 |
+| `asset_get_asset_tree` | 恢复完整渗透状态 (续轮第一指令，含情报层) | 目标 ✅ |
+| `asset_upsert_host` | 写入主机资产 (存活/技术栈/脆弱标记) | **情报** |
+| `asset_upsert_service` | 写入端口/服务 (CVE 映射的输入) | **情报** |
+| `asset_add_finding` | 记录非漏洞情报 (.env/JWT/默认口令/CVE) | **情报** |
+| `asset_inject_endpoint` | 注入新发现的接口 (含 host 维度) | 攻击面 ✅ |
+| `asset_annotate_endpoint` | 接口风险标注 (risk_tags/priority) | 攻击面 |
+| `asset_record_vuln` | 漏洞入库 (触发五层门禁，含 cwe/cvss) | 结果 ✅ |
+| `asset_update_coverage` | 更新覆盖矩阵 (**reason 记录未测原因**) | 结果 ✅ |
+| `asset_record_chain` | 记录攻击链 (多低危串成高危) | 结果 |
+| `asset_record_traffic` | 记录证据流量 (仅探针命中/漏洞验证/登录) | 结果 |
+| `asset_set_auth` | 写入 per-host 认证凭据 | 认证 |
+| `router_match` | 信号→技能映射 | 路由 |
+| `gate_override_check` | 决策门覆写检测 (单向放宽) | 路由 |
+| `session_checkpoint` | 写续轮点 | 续轮 ✅ |
+| `session_resume` | 恢复 pending 端点 | 续轮 ✅ |
+
+> ~~`probe_run`~~ 已移除 —— 探针改回 bash（`probes/*.sh` + `run_probes_tier1/2`）。
+> 探针命中后由 skill 层调 `asset_update_coverage` 回写覆盖矩阵。
 
 ---
 

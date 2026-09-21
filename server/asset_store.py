@@ -130,6 +130,56 @@ CREATE TABLE IF NOT EXISTS traffic (
     truncated INTEGER DEFAULT 0     -- ★ body 是否被截断
 );
 
+CREATE TABLE IF NOT EXISTS hosts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id INTEGER REFERENCES targets(id),
+    host TEXT NOT NULL,              -- admin.target.com
+    ip TEXT DEFAULT '',
+    http_status INTEGER DEFAULT 0,
+    https_status INTEGER DEFAULT 0,
+    title TEXT DEFAULT '',           -- 页面标题，快速识别用途
+    tech TEXT DEFAULT '[]',          -- JSON 数组：技术栈指纹
+    server TEXT DEFAULT '',          -- nginx / Tomcat / IIS
+    cdn_waf TEXT DEFAULT '',         -- Cloudflare / 无
+    is_alive INTEGER DEFAULT 0,
+    is_fragile INTEGER DEFAULT 0,    -- 脆弱子域标记（Gate 1 Q6 评分来源）
+    fragile_reason TEXT DEFAULT '',  -- admin / dev / test / old ...
+    cname TEXT DEFAULT '',           -- 子域接管检测用
+    first_seen_wave INTEGER DEFAULT 0,
+    created_at INTEGER,
+    UNIQUE(target_id, host)
+);
+
+CREATE TABLE IF NOT EXISTS services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id INTEGER REFERENCES hosts(id),
+    port INTEGER NOT NULL,
+    protocol TEXT DEFAULT 'tcp',
+    service TEXT DEFAULT '',         -- http / mysql / redis / smb
+    product TEXT DEFAULT '',         -- nginx / OpenSSH
+    version TEXT DEFAULT '',         -- 1.18.0
+    banner TEXT DEFAULT '',
+    state TEXT DEFAULT 'open',
+    first_seen_wave INTEGER DEFAULT 0,
+    created_at INTEGER,
+    UNIQUE(host_id, port, protocol)
+);
+
+CREATE TABLE IF NOT EXISTS findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id INTEGER,
+    host_id INTEGER DEFAULT NULL,
+    endpoint_id INTEGER DEFAULT NULL,
+    kind TEXT DEFAULT '',            -- sensitive_file / jwt_token / default_cred
+                                     -- / cve_match / takeover_candidate / api_doc
+                                     -- / email_security / exposed_actuator ...
+    severity TEXT DEFAULT 'info',    -- info / low / medium / high
+    title TEXT DEFAULT '',
+    detail TEXT DEFAULT '',
+    evidence TEXT DEFAULT '{}',
+    created_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS vulns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     endpoint_id INTEGER,
@@ -515,6 +565,170 @@ class AssetStore:
                 return {"Cookie": tk}
         return {}
 
+    # ── hosts (主机资产) ───────────────────────────────────────────────────
+    # 侦察层情报的落点 —— 没有它，"我扫过什么"这个状态就没外置。
+    def upsert_host(self, target_id: int, host: str, **fields) -> int:
+        """写入/更新一台主机。已存在则合并（非空字段覆盖，空值保留旧值）。"""
+        allowed = {"ip", "http_status", "https_status", "title", "server",
+                   "cdn_waf", "cname", "fragile_reason", "first_seen_wave"}
+        json_fields = {"tech"}
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM hosts WHERE target_id=? AND host=?",
+                            (target_id, host)).fetchone()
+            if row:
+                hid = row["id"]
+                sets, args = [], []
+                for k, v in fields.items():
+                    if k in json_fields:
+                        old = json.loads(row[k] or "[]")
+                        v = sorted(set(old) | set(v if isinstance(v, list) else [v]))
+                        sets.append(f"{k}=?"); args.append(json.dumps(v))
+                    elif k in allowed and v not in (None, "", 0):
+                        sets.append(f"{k}=?"); args.append(v)
+                if sets:
+                    args.append(hid)
+                    c.execute(f"UPDATE hosts SET {', '.join(sets)} WHERE id=?", args)
+                return hid
+            tech = fields.get("tech", [])
+            if not isinstance(tech, list):
+                tech = [tech]
+            cur = c.execute(
+                "INSERT INTO hosts(target_id, host, ip, http_status, https_status,"
+                " title, tech, server, cdn_waf, is_alive, is_fragile, fragile_reason,"
+                " cname, first_seen_wave, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (target_id, host, fields.get("ip", ""),
+                 fields.get("http_status", 0), fields.get("https_status", 0),
+                 fields.get("title", ""), json.dumps(tech, ensure_ascii=False),
+                 fields.get("server", ""), fields.get("cdn_waf", ""),
+                 1 if fields.get("is_alive") else 0,
+                 1 if fields.get("is_fragile") else 0,
+                 fields.get("fragile_reason", ""), fields.get("cname", ""),
+                 fields.get("first_seen_wave", 0), int(time.time())))
+            return cur.lastrowid
+
+    def mark_host_alive(self, target_id: int, host: str, code: int,
+                        https: bool = False) -> None:
+        """只更新存活状态 —— 探活后的轻量调用。"""
+        col = "https_status" if https else "http_status"
+        with self._conn() as c:
+            c.execute(f"UPDATE hosts SET {col}=?, is_alive=1 WHERE target_id=? AND host=?",
+                      (code, target_id, host))
+
+    def get_host(self, target_id: int, host: str) -> Optional[Dict]:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM hosts WHERE target_id=? AND host=?",
+                            (target_id, host)).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["tech"] = json.loads(d.get("tech") or "[]")
+            d["is_alive"] = bool(d.get("is_alive"))
+            d["is_fragile"] = bool(d.get("is_fragile"))
+            return d
+
+    def list_hosts(self, target_id: int, alive_only: bool = False,
+                   fragile_only: bool = False) -> List[Dict]:
+        sql = "SELECT * FROM hosts WHERE target_id=?"
+        if alive_only:
+            sql += " AND is_alive=1"
+        if fragile_only:
+            sql += " AND is_fragile=1"
+        with self._conn() as c:
+            out = []
+            for r in c.execute(sql + " ORDER BY is_fragile DESC, host", (target_id,)):
+                d = dict(r)
+                d["tech"] = json.loads(d.get("tech") or "[]")
+                d["is_alive"] = bool(d.get("is_alive"))
+                d["is_fragile"] = bool(d.get("is_fragile"))
+                out.append(d)
+            return out
+
+    def host_stats(self, target_id: int) -> Dict:
+        """主机层统计 —— Gate 1 Q6（高价值子域）的直接输入。"""
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT COUNT(*) total, SUM(is_alive) alive,"
+                " SUM(is_fragile) fragile FROM hosts WHERE target_id=?",
+                (target_id,)).fetchone()
+            return {"hosts_total": r["total"] or 0,
+                    "hosts_alive": r["alive"] or 0,
+                    "hosts_fragile": r["fragile"] or 0}
+
+    # ── services (端口/服务) ───────────────────────────────────────────────
+    # CVE 映射（product:version → OSV）与默认凭证检测的输入。
+    def upsert_service(self, host_id: int, port: int, protocol: str = "tcp",
+                       service: str = "", product: str = "", version: str = "",
+                       banner: str = "", first_seen_wave: int = 0) -> int:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id FROM services WHERE host_id=? AND port=? AND protocol=?",
+                (host_id, port, protocol)).fetchone()
+            if row:
+                c.execute(
+                    "UPDATE services SET service=COALESCE(NULLIF(?,''),service),"
+                    " product=COALESCE(NULLIF(?,''),product),"
+                    " version=COALESCE(NULLIF(?,''),version),"
+                    " banner=COALESCE(NULLIF(?,''),banner) WHERE id=?",
+                    (service, product, version, banner, row["id"]))
+                return row["id"]
+            cur = c.execute(
+                "INSERT INTO services(host_id, port, protocol, service, product,"
+                " version, banner, first_seen_wave, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (host_id, port, protocol, service, product, version, banner,
+                 first_seen_wave, int(time.time())))
+            return cur.lastrowid
+
+    def list_services(self, host_id: int) -> List[Dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM services WHERE host_id=? ORDER BY port", (host_id,))]
+
+    def fingerprint_services(self, target_id: int) -> List[Dict]:
+        """返回带 product:version 的服务 —— CVE 映射直接吃这个格式。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT s.*, h.host FROM services s JOIN hosts h ON h.id=s.host_id"
+                " WHERE h.target_id=? AND (s.product!='' OR s.service!='')"
+                " ORDER BY h.host, s.port", (target_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── findings (情报发现，非漏洞) ────────────────────────────────────────
+    # .env 泄露 / JWT token / 默认口令 / CVE 命中 / 子域接管候选 —— 这些
+    # 通常不是"漏洞"，但常是攻击链的起点，必须留档（否则不进报告）。
+    def add_finding(self, target_id: int, kind: str, title: str,
+                    detail: str = "", severity: str = "info",
+                    evidence: Optional[Dict] = None,
+                    host_id: Optional[int] = None,
+                    endpoint_id: Optional[int] = None) -> int:
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO findings(target_id, host_id, endpoint_id, kind,"
+                " severity, title, detail, evidence, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (target_id, host_id, endpoint_id, kind, severity, title, detail,
+                 json.dumps(evidence or {}, ensure_ascii=False), int(time.time())))
+            return cur.lastrowid
+
+    def list_findings(self, target_id: int, kind: str = "",
+                      min_severity: str = "") -> List[Dict]:
+        order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        sql = "SELECT * FROM findings WHERE target_id=?"
+        args: List[Any] = [target_id]
+        if kind:
+            sql += " AND kind=?"; args.append(kind)
+        with self._conn() as c:
+            out = []
+            for r in c.execute(sql + " ORDER BY id", args):
+                d = dict(r)
+                d["evidence"] = json.loads(d.get("evidence") or "{}")
+                if min_severity and order.get(d["severity"], 9) > order.get(min_severity, 9):
+                    continue
+                out.append(d)
+            out.sort(key=lambda x: order.get(x["severity"], 9))
+            return out
+
     # ── traffic ────────────────────────────────────────────────────────────
     # ⚠️ 只记有价值的请求（探针命中/漏洞验证/认证尝试/关键侦察响应）。
     #    普通请求不要入库 —— 每个存 2KB+，全量会撑爆 DB。
@@ -709,10 +923,20 @@ class AssetStore:
         vulns = self.list_vulns(target_id)
         stats = self.coverage_matrix(target_id)
 
+        # ★ 侦察层情报 —— 没有它，"我扫过什么"就没外置
+        hosts = self.list_hosts(target_id)
+        host_by_id = {h["id"]: h for h in hosts}
+
         base = {
             "target": tgt["url"],
             "root_domain": tgt.get("root_domain", ""),
             "auth_mode": tgt["auth_mode"],
+
+            # 情报层：主机 / 服务 / 非漏洞发现
+            "hosts": hosts,
+            "services": self.fingerprint_services(target_id),
+            "findings": self.list_findings(target_id),
+
             "credentials": self.list_credentials(target_id),
             "vulns": vulns,
             "chains": self.list_chains(target_id),
@@ -726,11 +950,11 @@ class AssetStore:
             base["endpoints"] = [self._endpoint_view(ep) for ep in endpoints]
             return base
 
-        # 按 host 分组
-        hosts: Dict[str, Dict] = {}
+        # 按 host 分组（用 groups 避免与外层的主机情报 hosts 重名）
+        groups: Dict[str, Dict] = {}
         for ep in endpoints:
             h = ep.get("host") or "(unknown)"
-            g = hosts.setdefault(h, {
+            g = groups.setdefault(h, {
                 "host": h, "target_id": target_id,
                 "endpoints": [], "vulns": [],
             })
@@ -740,13 +964,12 @@ class AssetStore:
         ep_host = {ep["id"]: (ep.get("host") or "(unknown)") for ep in endpoints}
         for v in vulns:
             h = ep_host.get(v.get("endpoint_id"), "(unknown)")
-            hosts.setdefault(h, {"host": h, "target_id": target_id,
-                                 "endpoints": [], "vulns": []})
-            hosts[h]["vulns"].append(v)
+            groups.setdefault(h, {"host": h, "target_id": target_id,
+                                  "endpoints": [], "vulns": []})
+            groups[h]["vulns"].append(v)
 
-        # 每个 host 的小结
-        for h, g in hosts.items():
-            ep_ids = [e["id"] for e in g["endpoints"]]
+        # 每个 host 的小结（补充主机情报层的信息：存活/脆弱/技术栈）
+        for h, g in groups.items():
             tested = sum(1 for e in g["endpoints"]
                          if e["test_status"] in ("done", "skipped"))
             blocked = sum(len(e["blocked_reasons"]) for e in g["endpoints"])
@@ -757,8 +980,17 @@ class AssetStore:
                 "blocked": blocked,
                 "vulns": len(g["vulns"]),
             }
+            # 关联主机情报（若有）
+            meta = next((x for x in hosts if x["host"] == h), None)
+            if meta:
+                g["alive"] = meta["is_alive"]
+                g["fragile"] = meta["is_fragile"]
+                g["tech"] = meta["tech"]
+                g["ip"] = meta.get("ip", "")
+                g["cdn_waf"] = meta.get("cdn_waf", "")
 
-        base["hosts"] = hosts
+        # ★ 端点按 host 分组 —— 与上面的 hosts（主机资产情报）语义不同，故分开命名
+        base["endpoint_groups"] = groups
         return base
 
 
