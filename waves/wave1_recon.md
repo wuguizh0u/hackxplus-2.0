@@ -234,10 +234,14 @@ bash scripts/merge_results.sh --wave 1c
 ## 2.5A/C — CVE 映射（与 Wave 1 并行）
 
 ```bash
-# 写入: results/02.5_cve_mapping.md / $TMP/1c_cve.json
-# 原脚本: SKILL.md.bak L1600-L1727 (Group 2.5A) + L1823-L1918 (Group 2.5C)
+# 写入: $TMP/1c_cve.json   ← 必须用这个名字，merge_results.sh 的 1c 分支会合并它
+#       （旧版写 1c_cve.json 但 merge 只认 2_d2_cve.json，导致 Wave 1 的 CVE 产物无人合并）
 # product:version → OSV.dev API + searchsploit read-only
-# 逻辑完全不变，仅输出路径改 $TMP
+#
+# 与 Wave 2 的 D2-CVE 关系：
+#   Wave 1 这里做的是「快速映射」（httpx 拿到的版本号 → OSV 查询），与 Wave 1 并行跑；
+#   Wave 2 的 D2-CVE 是「深度映射」（nuclei 结果 + 更多指纹）。
+#   两者产出同名文件的不同部分，merge 时按 JSON 数组合并去重。
 ```
 
 ---

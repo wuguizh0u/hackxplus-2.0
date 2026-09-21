@@ -80,6 +80,16 @@ merge_json_append() {
 import json, sys, os
 out_path = sys.argv[1]
 merged = []
+# ★ 先读现有输出文件 —— 这个函数是"追加"语义，跨 Wave 多次调用时
+#   必须保留前一次的结果（否则 Wave 2 的 D2-CVE 会覆盖 Wave 1 的 2.5A/C）
+if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+    try:
+        with open(out_path, encoding="utf-8") as fh:
+            prev = json.load(fh)
+            if isinstance(prev, list):
+                merged.extend(prev)
+    except Exception:
+        pass
 for f in sys.argv[2:]:
     if os.path.exists(f) and os.path.getsize(f) > 0:
         try:
@@ -200,6 +210,10 @@ elif [ "$WAVE" = "1c" ]; then
   merge_json_append "defaults.json" \
     "$TMP_DIR/1c_c1_defaults.json"
 
+  # 2.5A/C — CVE 映射（Wave 1 并行产出；Wave 2 的 D2-CVE 会追加到同一文件）
+  merge_json_append "cve_mapping.json" \
+    "$TMP_DIR/1c_cve.json"
+
   # C2-Sensitive (feroxbuster 结果也是 URL，一并并入 sensitive_files)
   merge_unique_lines "sensitive_files.txt" \
     "$TMP_DIR/1c_c2_sensitive.txt" \
@@ -240,7 +254,10 @@ elif [ "$WAVE" = "2" ]; then
     "$TMP_DIR/2_d5_js_webpack.txt"
 
   [ -f "$TMP_DIR/2_d6_passwords.json" ] && cp "$TMP_DIR/2_d6_passwords.json" "$SHARED_DIR/passwords.json"
-  [ -f "$TMP_DIR/2_d2_cve.json" ] && cp "$TMP_DIR/2_d2_cve.json" "$SHARED_DIR/cve_mapping.json"
+
+  # D2-CVE — 追加到 Wave 1 的 2.5A/C 结果（不能 cp，会覆盖 Wave 1 的映射）
+  merge_json_append "cve_mapping.json" \
+    "$TMP_DIR/2_d2_cve.json"
 
 # ====================================
 # Wave 3 — 探针结果 + 深度利用汇总
@@ -248,10 +265,13 @@ elif [ "$WAVE" = "2" ]; then
 elif [ "$WAVE" = "3" ]; then
   [ -f "$TMP_DIR/3_probe_hits.json" ] && cp "$TMP_DIR/3_probe_hits.json" "$SHARED_DIR/probe_hits.json"
 
-  # 深度利用产出 → 直接复制到 _shared/ 供 Wave 4 读取
-  for f in "$TMP_DIR"/3_exploit_*.md; do
-    [ -f "$f" ] && cp "$f" "$SHARED_DIR/"
+  # 深度利用产出（$SHARED/04_<skill>.md）由 wave3 Step 4 直写共享层，无需中转。
+  # 这里只在旧版布局残留时做一次兜底搬运。
+  for f in "$TMP_DIR"/04_*.md "$TMP_DIR"/3_exploit_*.md; do
+    [ -f "$f" ] && cp "$f" "$SHARED_DIR/" 2>/dev/null
   done
+  ls "$SHARED_DIR"/04_*.md >/dev/null 2>&1 && \
+    echo "[merge]   deep-exploitation: $(ls "$SHARED_DIR"/04_*.md 2>/dev/null | wc -l | tr -d ' ') files"
 fi
 
 # ====================================
@@ -262,7 +282,7 @@ if [ "$WAVE" = "1b" ] || [ "$WAVE" = "2" ]; then
   # 注意: 路径必须经 sys.argv 传入, 不能在源码字符串里展开 "$SHARED_DIR"
   # 原因: git-bash 无 LANG 时按 GBK 处理, 含中文的路径展开进 Python 源码会被破坏
   python3 - "$SHARED_DIR" <<'PYEOF' || echo "[merge]   signals.json: skipped (Python error)"
-import json, os, sys
+import json, os, re, sys
 
 sd = sys.argv[1]
 signals = {'tech': {}, 'attack_surface': {}, 'infra': {}}
@@ -301,9 +321,52 @@ if os.path.exists(urls_path):
         'has_multitenant': bool('/org/' in urls or '/tenant/' in urls),
     }
 
-with open(os.path.join(sd, 'signals.json'), 'w', encoding='utf-8') as f:
-    json.dump(signals, f, indent=2, ensure_ascii=False)
-print('[merge]   signals.json written')
+# has_upload / has_jwt —— 从 Wave 1c 的产物推断（之前缺失导致这两个信号恒为 None）
+if os.path.exists(os.path.join(sd, 'upload_surface.json')):
+    signals['attack_surface']['has_upload'] = True
+elif os.path.exists(urls_path) and re.search(r'/(upload|file|attach|avatar|import)', urls):
+    signals['attack_surface']['has_upload'] = True
+
+jwt_path = os.path.join(sd, 'jwt_tokens.txt')
+if os.path.exists(jwt_path) and os.path.getsize(jwt_path) > 0:
+    signals['attack_surface']['has_jwt'] = True
+
+# infra 基础字段
+signals['infra'].setdefault('open_ports', [])
+ports_path = os.path.join(sd, 'ports.json')
+if os.path.exists(ports_path):
+    try:
+        with open(ports_path, encoding='utf-8') as f:
+            p = json.load(f)
+        tcp = p.get('tcp', p) if isinstance(p, dict) else {}
+        signals['infra']['open_ports'] = sorted(
+            int(k) for k in tcp.keys() if str(k).isdigit())
+    except Exception:
+        pass
+
+# ★ 合并而非覆盖 —— signal_router.md 会往同一个文件追加 matched_skills。
+#   直接写会把它的结果冲掉（两者都在 Wave 3 前后写这一份）。
+sig_path = os.path.join(sd, 'signals.json')
+existing = {}
+if os.path.exists(sig_path):
+    try:
+        with open(sig_path, encoding='utf-8') as f:
+            existing = json.load(f)
+    except Exception:
+        existing = {}
+for k, v in signals.items():
+    if isinstance(v, dict) and isinstance(existing.get(k), dict):
+        merged = dict(v)
+        for kk, vv in existing[k].items():
+            if vv not in (None, '', [], {}):
+                merged[kk] = vv      # 已存在且非空的值优先（不覆盖 signal_router 的检测）
+        existing[k] = merged
+    elif k not in existing or existing[k] in (None, '', [], {}):
+        existing[k] = v
+
+with open(sig_path, 'w', encoding='utf-8') as f:
+    json.dump(existing, f, indent=2, ensure_ascii=False)
+print('[merge]   signals.json written (merged)')
 PYEOF
 fi
 

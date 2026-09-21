@@ -52,30 +52,42 @@ EOF
       sleep "$wait_sec"
 
       # 解析 interactsh 日志中的 callback
-      python3 -c "
-import json, re, os
-log='$TMP/interactsh_output.txt'; domain='${OAST_DOMAIN:-}'
-cbs=[]
+      # 路径经 argv 传入（含中文/含 /c/ 前缀的绝对路径展开进源码会失效）
+      python3 - "$TMP/interactsh_output.txt" "$SHARED/oast_callbacks.json" "${OAST_DOMAIN:-}" <<'PYEOF' 2>/dev/null
+import json, re, os, sys
+log, out, domain = sys.argv[1], sys.argv[2], sys.argv[3]
+cbs = []
 if os.path.exists(log):
-    content=open(log,errors='ignore').read()
+    with open(log, errors="ignore") as f:
+        content = f.read()
     for m in re.finditer(r'Received\s+(HTTP|DNS|SMTP|LDAP)\s+interaction\s+from\s+(\S+)', content, re.I):
-        cbs.append({'type':m.group(1).upper(),'source_ip':m.group(2),'domain':domain})
+        cbs.append({'type': m.group(1).upper(), 'source_ip': m.group(2), 'domain': domain})
     for line in content.split('\n'):
         if domain and domain in line and 'Received' in line:
-            if not any(c.get('raw')==line.strip() for c in cbs): cbs.append({'raw':line.strip()[:200]})
-json.dump({'domain':domain,'callback_count':len(cbs),'callbacks':cbs}, open('$SHARED/oast_callbacks.json','w'),indent=2)
+            if not any(c.get('raw') == line.strip() for c in cbs):
+                cbs.append({'raw': line.strip()[:200]})
+with open(out, 'w', encoding='utf-8') as f:
+    json.dump({'domain': domain, 'callback_count': len(cbs), 'callbacks': cbs},
+              f, indent=2, ensure_ascii=False)
 print(f'[oast] {len(cbs)} callbacks')
-" 2>/dev/null
+PYEOF
       ;;
 
     stop)
       oast_lifecycle poll 5
       [ -n "${OAST_PID:-}" ] && kill "$OAST_PID" 2>/dev/null && wait "$OAST_PID" 2>/dev/null
       pkill -f "interactsh-client" 2>/dev/null || true
-      python3 -c "import json,os;f='$SHARED/oast.json';
-d=json.load(open(f)) if os.path.exists(f) else {};d['status']='completed';d['stopped_at']='$(date -Iseconds)';
-cb=json.load(open('$SHARED/oast_callbacks.json')) if os.path.exists('$SHARED/oast_callbacks.json') else {};
-d['callback_count']=cb.get('callback_count',0);json.dump(d,open(f,'w'),indent=2)" 2>/dev/null
+      python3 - "$SHARED/oast.json" "$SHARED/oast_callbacks.json" "$(date -Iseconds)" <<'PYEOF' 2>/dev/null
+import json, os, sys
+f, cbf, ts = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(f, encoding="utf-8")) if os.path.exists(f) else {}
+d["status"] = "completed"
+d["stopped_at"] = ts
+cb = json.load(open(cbf, encoding="utf-8")) if os.path.exists(cbf) else {}
+d["callback_count"] = cb.get("callback_count", 0)
+with open(f, "w", encoding="utf-8") as fh:
+    json.dump(d, fh, indent=2, ensure_ascii=False)
+PYEOF
       echo "[oast] Stopped"; unset OAST_DOMAIN OAST_PID
       ;;
   esac

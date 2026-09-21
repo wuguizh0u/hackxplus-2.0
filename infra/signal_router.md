@@ -282,9 +282,35 @@ if os.path.exists(f'{SHARED}/urls_all.txt'):
     if re.search(r'/(csv|excel|export|download\.(csv|xls))', urls, re.I): matched.add('csv-formula-injection')
     if re.search(r'(ws://|wss://)', urls, re.I): matched.add('websocket-security')
 
-signals['matched_skills'] = sorted(matched)
-with open(f'{SHARED}/signals.json', 'w') as f:
-    json.dump(signals, f, indent=2)
+# ★ 合并而非覆盖 —— signals.json 有两个写入方：
+#   merge_results.sh 写基础信号 {tech, attack_surface, infra}
+#   signal_router    追加 matched_skills（深度利用技能清单）
+# 直接覆盖会把 merge 写的基础信号冲掉，导致下游读 tech/attack_surface 全空。
+sig_path = os.path.join(SHARED, 'signals.json')
+existing = {}
+if os.path.exists(sig_path):
+    try:
+        with open(sig_path, encoding='utf-8') as f:
+            existing = json.load(f)
+    except Exception:
+        existing = {}
+
+# 深合并：保留 merge 写的基础字段，补充本模块检测到的（本模块结果优先非空值）
+for k, v in signals.items():
+    if k == 'matched_skills':
+        continue
+    if isinstance(v, dict) and isinstance(existing.get(k), dict):
+        merged = dict(existing[k])
+        for kk, vv in v.items():
+            if vv not in (None, '', [], {}):
+                merged[kk] = vv
+        existing[k] = merged
+    elif v not in (None, '', [], {}):
+        existing[k] = v
+
+existing['matched_skills'] = sorted(matched)
+with open(sig_path, 'w', encoding='utf-8') as f:
+    json.dump(existing, f, indent=2, ensure_ascii=False)
 
 print(f'[signals] {len(matched)} matched hack-skills:')
 for s in sorted(matched): print(f'  → {s}')

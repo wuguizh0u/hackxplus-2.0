@@ -6,7 +6,10 @@
 
 ## 4.1 高危发现授权确认（AskUserQuestion 弹窗）
 
-扫描 Wave 3 全部产出（`_work/04_*.md`、`_work/shared/probe_hits.json`），若发现可立即利用的高危漏洞（RCE/未授权 bypass/数据库泄露/签名密钥泄露等），**使用 AskUserQuestion 逐条弹窗确认**，等待用户回复：
+扫描 Wave 3 全部产出（`$SHARED/04_*.md`、`$SHARED/probe_hits.json`），若发现可立即利用的高危漏洞（RCE/未授权 bypass/数据库泄露/签名密钥泄露等），**使用 AskUserQuestion 逐条弹窗确认**，等待用户回复：
+
+> **主路径已改为 SQLite**：优先调 MCP `asset_get_asset_tree(target_id)` 读 `vulns[]`
+> 中 `severity in (critical, high)` 的条目。`$SHARED/04_*.md` 作为证据附件。
 
 **问题设置：**
 - header: `"高危发现 #N"`
@@ -18,19 +21,30 @@
 
 所有选「仅报告」的发现标记为"具备利用价值，未执行"。
 
-完成后写 `_work/shared/decisions/vuln_triage.json` 记录决策结果。
+完成后写 `$SHARED/decisions/vuln_triage.json` 记录决策结果。
 
 ---
 
 ## 4.2 生成 REPORT.md
 
-读 `_work/` 全部产出，生成 `_report/REPORT.md`，包含：
+**主路径：读 SQLite 资产树**（调 MCP `asset_get_asset_tree`），输出到 `$REPORT_DIR/{host}_{date}.md`：
+
+- `vulns[]` → 漏洞清单（**已过五层门禁，直接可用**）
+- `stats` → 执行摘要的数字（total_endpoints / tested / pending / vulns_found）
+- `credentials[]` → 已获取凭据章节
+- `endpoints[]` → 攻击面清单
+- `target` / `auth_mode` → 目标概况
+
+**辅助路径**：`$SHARED/` 下的 `04_*.md`（深度利用证据原文）、`probe_hits.json`（探针原始命中）、
+`signals.json` + `target_profile.json`（技术栈/画像）、`failures.json`（未完成项）。
+
+REPORT.md 内容：
 
 1. **执行摘要** — 目标概况、漏洞总数、最严重问题（2-3 句）
-2. **攻击面清单** — 子域/端口/技术栈/API 端点概览（读 signals.json + target_profile.json）
+2. **攻击面清单** — 子域/端口/技术栈/API 端点概览
 3. **漏洞清单** — 每个漏洞：CVSS 评分 + 严重度 + HTTP 原始证据 + 复现步骤 + 业务影响 + 修复建议（按 P0 RCE > P1 Auth > P2 Info 排序）
 4. **攻击链** — 多个低危组合成高危的链（如：JS 密钥泄露 → 未授权 API → 越权数据访问）
-5. **未完成项** — 读 `failures.json`，标注超时/跳过的测试及影响
+5. **未完成项** — 读 `failures.json` + 资产树的 `coverage.pending`，标注超时/跳过的测试及影响
 6. **修复优先级** — P0（24h 修补）/ P1（1 周内）/ P2（1 月内）
 
 **Chrome MCP 截图留证**：仅对 CVSS ≥ 8.0 的链执行浏览器验证并截图到 `_report/screenshots/`。

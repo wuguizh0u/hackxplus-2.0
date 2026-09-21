@@ -12,10 +12,24 @@ init_hackprobe_dir() {
   local date_str=$(date +%Y-%m-%d)
   local name="${host}_${date_str}"
 
-  # 输出根目录 —— 必须全 ASCII
-  #   原因：git-bash 无 LANG 时按 GBK 处理，含中文的路径经 bash 变量展开进
-  #   Python 源码会被写坏（实测 exists=False）。ASCII 路径彻底绕开此问题。
-  DESKTOP="$HOME/Desktop/hackxplus"
+  # 输出根目录 —— 必须全 ASCII，且必须是 **Windows 盘符格式**
+  #   两个独立原因：
+  #   1) 编码：git-bash 无 LANG 时按 GBK 处理，含中文的路径展开进 Python 源码会被写坏
+  #   2) 格式：$HOME 在 git-bash 里是 POSIX 格式（/c/Users/...），而 Windows 原生
+  #      Python 不认这个前缀 —— os.path.exists('/c/...') 恒为 False。
+  #      下方 to_win 把它转成 C:/... ，bash 和 python 两边都能用。
+  to_win() {
+    local p="$1"
+    if command -v cygpath >/dev/null 2>&1; then
+      cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
+    elif [ "${p:0:1}" = "/" ] && [ "${p:2:1}" = "/" ]; then
+      printf '%s' "$(printf '%s' "${p:1:1}" | tr 'a-z' 'A-Z'):${p:2}"
+    else
+      printf '%s' "$p"
+    fi
+  }
+
+  DESKTOP="$(to_win "$HOME/Desktop/hackxplus")"
   REPORT_DIR="$DESKTOP/reports"          # 最终 REPORT.md
   AUDIT_DIR="$DESKTOP/audit/$name"       # timeline / heartbeat / agent_logs
   WORK_DIR="$DESKTOP/work/$name"         # 工作目录（_work 在这下面）
