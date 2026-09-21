@@ -11,11 +11,13 @@ MCP 协议走 stdio (默认). 参考文章同款架构: agent 通过 MCP 工具�
 
 工具清单:
     asset_create_target     建目标 (每个活子域一个)
-    asset_get_asset_tree    恢复/查看完整渗透状态 (续轮第一指令)
-    asset_inject_endpoint   注入新发现的接口
+    asset_get_asset_tree    恢复/查看完整渗透状态 (续轮第一指令，按 host 分组)
+    asset_inject_endpoint   注入新发现的接口 (含 host 维度)
     asset_annotate_endpoint 接口风险标注
-    asset_record_vuln       漏洞入库 (触发五层门禁)
-    asset_update_coverage   更新覆盖矩阵
+    asset_record_vuln       漏洞入库 (触发五层门禁，含 cwe/cvss/confidence)
+    asset_update_coverage   更新覆盖矩阵 (reason 记录"为什么没测")
+    asset_record_chain      记录攻击链 (多低危串成高危)
+    asset_record_traffic    记录证据流量 (仅探针命中/漏洞验证/登录)
     asset_set_auth          写入 per-host 认证凭据
     router_match            信号→技能映射
     gate_override_check     决策门覆写检测
@@ -64,14 +66,18 @@ class HackXPlusCore:
         self._seen_keys: set = set()
 
     # 资产库
-    def asset_get_asset_tree(self, target_id: int) -> Dict:
-        return self.store.asset_tree(target_id)
+    def asset_get_asset_tree(self, target_id: int, group_by_host: bool = True) -> Dict:
+        """group_by_host=True 时按子域分组返回（多子域场景看得清哪个测到哪了）。"""
+        return self.store.asset_tree(target_id, group_by_host=group_by_host)
 
     def asset_inject_endpoint(self, target_id: int, path: str, method: str = "GET",
                               params: Optional[List[str]] = None,
-                              func_desc: str = "", risk_tags: Optional[List[str]] = None) -> Dict:
+                              func_desc: str = "", risk_tags: Optional[List[str]] = None,
+                              host: str = "", priority: int = 1,
+                              first_seen_wave: int = 0) -> Dict:
         eid = self.store.inject_endpoint(target_id, path, method, params,
-                                         func_desc, risk_tags)
+                                         func_desc, risk_tags, priority=priority,
+                                         host=host, first_seen_wave=first_seen_wave)
         return {"endpoint_id": eid}
 
     def asset_annotate_endpoint(self, endpoint_id: int, risk_tags: List[str],
@@ -81,8 +87,15 @@ class HackXPlusCore:
 
     def asset_record_vuln(self, endpoint_id: int, vtype: str, severity: str,
                           title: str, description: str = "",
-                          evidence: Optional[Dict] = None) -> Dict:
-        """漏洞入库 → 过五层门禁, 拒绝则不写入. """
+                          evidence: Optional[Dict] = None,
+                          cwe: str = "", cvss: float = 0.0,
+                          confidence: str = "firm",
+                          traffic_id: Optional[int] = None) -> Dict:
+        """漏洞入库 → 过五层门禁, 拒绝则不写入.
+
+        traffic_id: 若已用 asset_record_traffic 存过证据流量，填它的 id，
+                    该流量会被回标关联到这个漏洞。
+        """
         vuln = Vuln(endpoint_id=endpoint_id, type=vtype, severity=severity,
                     title=title, description=description, evidence=evidence or {})
         res = self.gate.validate(vuln)
@@ -91,14 +104,55 @@ class HackXPlusCore:
         vid = self.store.record_vuln(
             endpoint_id=endpoint_id, vtype=vtype, severity=severity,
             title=title, description=description, evidence=evidence or {},
-            dedup_key=res.dedup_key, gate_status="accepted")
-        self.store.update_coverage(endpoint_id, vtype, "confirmed")
+            dedup_key=res.dedup_key, gate_status="accepted",
+            cwe=cwe, cvss=cvss, confidence=confidence)
+        self.store.update_coverage(endpoint_id, vtype, "confirmed",
+                                   evidence_ref=(f"traffic:{traffic_id}" if traffic_id else ""))
+        if traffic_id:
+            with self.store._conn() as c:
+                c.execute("UPDATE traffic SET vuln_id=?, purpose='vuln_verify' WHERE id=?",
+                          (vid, traffic_id))
         return {"ok": True, "vuln_id": vid}
 
     def asset_update_coverage(self, endpoint_id: int, vuln_type: str,
-                              status: str) -> Dict:
-        self.store.update_coverage(endpoint_id, vuln_type, status)
+                              status: str, reason: str = "",
+                              evidence_ref: str = "") -> Dict:
+        """更新覆盖矩阵.
+
+        reason: 未测成的原因 —— waf_blocked / timeout / needs_auth /
+                skipped_low_priority / out_of_scope / tool_missing / rate_limited。
+                留空表示"还没轮到"。这个区分让报告能说清"没做"和"做不了"。
+        """
+        self.store.update_coverage(endpoint_id, vuln_type, status,
+                                   reason=(reason or None), evidence_ref=evidence_ref)
         return {"ok": True}
+
+    def asset_record_chain(self, target_id: int, name: str, narrative: str = "",
+                           severity: str = "high", cvss: float = 0.0,
+                           steps: Optional[List[Dict]] = None,
+                           verified: bool = False) -> Dict:
+        """记录攻击链（多低危串成高危）。
+
+        steps: [{"vuln_id": 3, "role": "入口"}, {"vuln_id": 7, "role": "提权"}]
+        """
+        cid = self.store.record_chain(target_id, name, narrative, severity,
+                                      cvss, steps, verified)
+        return {"ok": True, "chain_id": cid}
+
+    def asset_record_traffic(self, endpoint_id: int, method: str, url: str,
+                             req_headers: Optional[Dict] = None, req_body: str = "",
+                             resp_status: int = 0, resp_headers: Optional[Dict] = None,
+                             resp_body: str = "", purpose: str = "probe_hit",
+                             vuln_id: Optional[int] = None) -> Dict:
+        """记录证据流量（只记有价值的：探针命中/漏洞验证/认证尝试/关键侦察）。
+
+        ⚠️ 不要记普通请求 —— body 上限 20KB，全量会撑爆 DB。
+        """
+        tid = self.store.add_traffic(endpoint_id, method, url,
+                                     req_headers or {}, req_body,
+                                     resp_status, resp_headers or {}, resp_body,
+                                     purpose=purpose, vuln_id=vuln_id)
+        return {"ok": True, "traffic_id": tid}
 
     def asset_set_auth(self, target_id: int, auth_type: str, token: str,
                        login_url: str = "", username: str = "") -> Dict:
@@ -166,13 +220,17 @@ def run_mcp(db_path: str) -> None:
                                          "auth_mode": {"type": "string"}},
                           "required": ["url"]}),
         Tool(name="asset_get_asset_tree", description="恢复/查看完整渗透状态 (续轮第一指令)",
-             inputSchema={"type": "object", "properties": {"target_id": {"type": "integer"}},
+             inputSchema={"type": "object",
+                          "properties": {"target_id": {"type": "integer"},
+                                         "group_by_host": {"type": "boolean"}},
                           "required": ["target_id"]}),
         Tool(name="asset_inject_endpoint", description="注入新发现的接口",
              inputSchema={"type": "object",
                           "properties": {"target_id": {"type": "integer"}, "path": {"type": "string"},
                                          "method": {"type": "string"}, "params": {"type": "string"},
-                                         "func_desc": {"type": "string"}, "risk_tags": {"type": "string"}},
+                                         "func_desc": {"type": "string"}, "risk_tags": {"type": "string"},
+                                         "host": {"type": "string"}, "priority": {"type": "integer"},
+                                         "first_seen_wave": {"type": "integer"}},
                           "required": ["target_id", "path"]}),
         Tool(name="asset_annotate_endpoint", description="接口风险标注",
              inputSchema={"type": "object",
@@ -183,13 +241,31 @@ def run_mcp(db_path: str) -> None:
              inputSchema={"type": "object",
                           "properties": {"endpoint_id": {"type": "integer"}, "vtype": {"type": "string"},
                                          "severity": {"type": "string"}, "title": {"type": "string"},
-                                         "description": {"type": "string"}, "evidence": {"type": "string"}},
+                                         "description": {"type": "string"}, "evidence": {"type": "string"},
+                                         "cwe": {"type": "string"}, "cvss": {"type": "number"},
+                                         "confidence": {"type": "string"}, "traffic_id": {"type": "integer"}},
                           "required": ["endpoint_id", "vtype", "severity", "title"]}),
-        Tool(name="asset_update_coverage", description="更新覆盖矩阵",
+        Tool(name="asset_update_coverage", description="更新覆盖矩阵 (reason 记录未测原因)",
              inputSchema={"type": "object",
                           "properties": {"endpoint_id": {"type": "integer"},
-                                         "vuln_type": {"type": "string"}, "status": {"type": "string"}},
+                                         "vuln_type": {"type": "string"}, "status": {"type": "string"},
+                                         "reason": {"type": "string"}, "evidence_ref": {"type": "string"}},
                           "required": ["endpoint_id", "vuln_type", "status"]}),
+        Tool(name="asset_record_chain", description="记录攻击链 (多低危串成高危)",
+             inputSchema={"type": "object",
+                          "properties": {"target_id": {"type": "integer"}, "name": {"type": "string"},
+                                         "narrative": {"type": "string"}, "severity": {"type": "string"},
+                                         "cvss": {"type": "number"}, "steps": {"type": "string"},
+                                         "verified": {"type": "boolean"}},
+                          "required": ["target_id", "name"]}),
+        Tool(name="asset_record_traffic", description="记录证据流量 (仅探针命中/漏洞验证/登录)",
+             inputSchema={"type": "object",
+                          "properties": {"endpoint_id": {"type": "integer"}, "method": {"type": "string"},
+                                         "url": {"type": "string"}, "req_headers": {"type": "string"},
+                                         "req_body": {"type": "string"}, "resp_status": {"type": "integer"},
+                                         "resp_headers": {"type": "string"}, "resp_body": {"type": "string"},
+                                         "purpose": {"type": "string"}, "vuln_id": {"type": "integer"}},
+                          "required": ["endpoint_id", "method", "url"]}),
         Tool(name="asset_set_auth", description="写入 per-host 认证凭据 (bearer/cookie/password/none)",
              inputSchema={"type": "object",
                           "properties": {"target_id": {"type": "integer"},
@@ -224,19 +300,35 @@ def run_mcp(db_path: str) -> None:
     HANDLERS = {
         "asset_create_target": lambda a: json.dumps({"target_id": core.store.create_target(
             a["url"], a.get("scope", "in-scope"), a.get("auth_mode", "unauthenticated"))}, ensure_ascii=False),
-        "asset_get_asset_tree": lambda a: json.dumps(core.asset_get_asset_tree(int(a["target_id"])), ensure_ascii=False),
+        "asset_get_asset_tree": lambda a: json.dumps(core.asset_get_asset_tree(
+            int(a["target_id"]), bool(a.get("group_by_host", True))), ensure_ascii=False),
         "asset_inject_endpoint": lambda a: json.dumps(core.asset_inject_endpoint(
             int(a["target_id"]), a["path"], a.get("method", "GET"),
             json.loads(a.get("params") or "[]"), a.get("func_desc", ""),
-            json.loads(a.get("risk_tags") or "[]")), ensure_ascii=False),
+            json.loads(a.get("risk_tags") or "[]"), a.get("host", ""),
+            int(a.get("priority", 1)), int(a.get("first_seen_wave", 0))), ensure_ascii=False),
         "asset_annotate_endpoint": lambda a: json.dumps(core.asset_annotate_endpoint(
             int(a["endpoint_id"]), json.loads(a.get("risk_tags") or "[]"),
             int(a.get("priority", 1))), ensure_ascii=False),
         "asset_record_vuln": lambda a: json.dumps(core.asset_record_vuln(
             int(a["endpoint_id"]), a["vtype"], a["severity"], a["title"],
-            a.get("description", ""), json.loads(a.get("evidence") or "{}")), ensure_ascii=False),
+            a.get("description", ""), json.loads(a.get("evidence") or "{}"),
+            a.get("cwe", ""), float(a.get("cvss", 0.0)), a.get("confidence", "firm"),
+            int(a["traffic_id"]) if a.get("traffic_id") is not None else None), ensure_ascii=False),
         "asset_update_coverage": lambda a: json.dumps(core.asset_update_coverage(
-            int(a["endpoint_id"]), a["vuln_type"], a["status"]), ensure_ascii=False),
+            int(a["endpoint_id"]), a["vuln_type"], a["status"],
+            a.get("reason", ""), a.get("evidence_ref", "")), ensure_ascii=False),
+        "asset_record_chain": lambda a: json.dumps(core.asset_record_chain(
+            int(a["target_id"]), a["name"], a.get("narrative", ""),
+            a.get("severity", "high"), float(a.get("cvss", 0.0)),
+            json.loads(a.get("steps") or "[]"),
+            bool(a.get("verified", False))), ensure_ascii=False),
+        "asset_record_traffic": lambda a: json.dumps(core.asset_record_traffic(
+            int(a["endpoint_id"]), a["method"], a["url"],
+            json.loads(a.get("req_headers") or "{}"), a.get("req_body", ""),
+            int(a.get("resp_status", 0)), json.loads(a.get("resp_headers") or "{}"),
+            a.get("resp_body", ""), a.get("purpose", "probe_hit"),
+            int(a["vuln_id"]) if a.get("vuln_id") is not None else None), ensure_ascii=False),
         "asset_set_auth": lambda a: json.dumps(core.asset_set_auth(
             int(a["target_id"]), a["auth_type"], a["token"],
             a.get("login_url", ""), a.get("username", "")), ensure_ascii=False),
@@ -295,14 +387,59 @@ if __name__ == "__main__":
 
     if args.self_test:
         c = HackXPlusCore(":memory:")
-        tid = c.store.create_target("http://demo", auth_mode="register")
-        eid = c.asset_inject_endpoint(tid, "/api/x", "GET", ["id"], "test", ["sqli"])["endpoint_id"]
-        print("inject:", eid)
-        print("record vuln:", c.asset_record_vuln(
-            eid, "cors", "info", "CORS on /api/x"))
-        print("record vuln:", c.asset_record_vuln(
-            eid, "sqli", "high", "SQLi /api/x?id=1", evidence={"params": ["id"]}))
-        print("tree stats:", c.asset_get_asset_tree(tid)["stats"])
+        tid = c.store.create_target("https://admin.demo.test", auth_mode="register")
+        tid2 = c.store.create_target("https://api.demo.test")
+        print("root_domain:", c.store.get_target(tid)["root_domain"])
+
+        eid = c.asset_inject_endpoint(tid, "/api/x", "GET", ["id"], "test",
+                                      ["sqli"], host="admin.demo.test",
+                                      first_seen_wave=1)["endpoint_id"]
+        eid2 = c.asset_inject_endpoint(tid2, "/api/users", "GET", ["id"], "users",
+                                       ["idor"], host="api.demo.test",
+                                       first_seen_wave=2)["endpoint_id"]
+        print("inject:", eid, eid2)
+
+        # Gate1 该拦 CORS
+        print("gate reject:", c.asset_record_vuln(eid, "cors", "info", "CORS on /api/x"))
+
+        # 证据流量
+        tr = c.asset_record_traffic(eid2, "GET", "https://api.demo.test/api/users?id=3",
+                                    {"Cookie": "S=x"}, "", 200,
+                                    {"Content-Type": "application/json"},
+                                    '{"users":[{"id":3}]}', purpose="vuln_verify")
+        print("traffic:", tr)
+
+        # 真洞入库（带 cwe/cvss）
+        r = c.asset_record_vuln(eid2, "idor", "high", "IDOR /api/users",
+                                evidence={"params": ["id"],
+                                          "unauthorized_data_access": True},
+                                cwe="CWE-639", cvss=8.1,
+                                traffic_id=tr["traffic_id"])
+        print("record vuln:", r)
+
+        # 阻塞原因
+        c.asset_update_coverage(eid, "sqli", "pending", reason="waf_blocked")
+        c.asset_update_coverage(eid, "xss", "pending", reason="needs_auth")
+
+        # 攻击链
+        print("chain:", c.asset_record_chain(
+            tid2, "IDOR -> 全量用户", "越权读库", severity="critical", cvss=8.1,
+            steps=[{"vuln_id": r.get("vuln_id"), "role": "影响"}]))
+
+        # 两个 target 各看一次：tid 有阻塞原因，tid2 有漏洞+链
+        t1 = c.asset_get_asset_tree(tid)
+        print("admin tree stats:", t1["stats"])
+        print("admin pending_by_reason:", t1["pending_by_reason"])
+
+        t2 = c.asset_get_asset_tree(tid2)
+        print("api tree stats:", t2["stats"])
+        print("api hosts:", list(t2["hosts"].keys()))
+        print("api chains:", len(t2["chains"]))
+
+        # 跨 host 续轮队列（阻塞的不该出现）
+        q = c.store.next_pending_across_hosts("demo.test", limit=5)
+        print("cross-host queue:", [(e["host"], e["path"]) for e in q])
+
         print("router:", c.router_match(tech_stack=["php"], attack_text="/upload"))
         sys.exit(0)
 
