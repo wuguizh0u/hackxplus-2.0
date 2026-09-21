@@ -98,10 +98,12 @@
 读 `_shared/` 产出，匹配 hack-skills → 写入 `signals.json`。
 
 ```bash
-python3 << 'PYEOF'
-import json, os, re
+# 路径经 argv 传入（quoted heredoc 不展开 shell 变量；直接内联 $SHARED 又会因
+# 中文路径被 git-bash 的 GBK 破坏）
+python3 - "$SHARED" "$TMP" << 'PYEOF'
+import json, os, re, sys
 
-SHARED = 'results/_shared'
+SHARED, TMP = sys.argv[1], sys.argv[2]
 
 # ====== PART A: Implicit framework detection ======
 def detect_implicit_lang():
@@ -110,7 +112,7 @@ def detect_implicit_lang():
     
     # Read HTTP headers from httpx or homepage
     headers = ""
-    for f in [f'{SHARED}/httpx.json', 'results/tmp/0a_homepage_headers.txt']:
+    for f in [f'{SHARED}/httpx.json', f'{TMP}/0a_homepage_headers.txt']:
         if os.path.exists(f):
             try:
                 with open(f, errors='ignore') as fh:
@@ -146,7 +148,7 @@ def detect_implicit_lang():
     
     # HTML-based detection
     homepage = ""
-    for f in ['results/tmp/0a_homepage.html']:
+    for f in [f'{TMP}/0a_homepage.html']:
         if os.path.exists(f):
             try:
                 with open(f, 'r', encoding='utf-8', errors='ignore') as fh:
@@ -187,7 +189,7 @@ def detect_implicit_lang():
     # Error-page language detection
     for f in os.listdir('results'):
         if not f.endswith('.txt') and not f.endswith('.html'): continue
-        fpath = f'results/{f}'
+        fpath = os.path.join(SHARED, f)
         try:
             with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
                 content = fh.read()[:5000]

@@ -1,23 +1,30 @@
 #!/bin/bash
 # merge_results.sh — 原子合并 Agent 私有临时文件到共享数据层
-# Usage: bash scripts/merge_results.sh --wave <1a|1b|1c|2|3>
+# Usage: bash scripts/merge_results.sh --wave <1a|1b|1c|2|3> [--partial]
+#
+#   --partial  容许输入文件缺失（超时/失败的 Agent 数据不全时用）。
+#              不带此标志时，缺失文件只会告警，不会中断（见下方 WARN）。
+#              同时会拾取 $SHARED/partial/ 下保全的部分数据。
 
 set -e
 
 WAVE=""
+PARTIAL=0
 WORK_DIR="${WORK_DIR:-.}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --wave) WAVE="$2"; shift 2 ;;
+    --wave)    WAVE="$2"; shift 2 ;;
+    --partial) PARTIAL=1; shift ;;
     *) echo "Unknown: $1"; exit 1 ;;
   esac
 done
 
-[ -z "$WAVE" ] && echo "Usage: merge_results.sh --wave <1a|1b|1c|2|3>" && exit 1
+[ -z "$WAVE" ] && echo "Usage: merge_results.sh --wave <1a|1b|1c|2|3> [--partial]" && exit 1
 
-# 路径基准统一：优先用 init_hackprobe_dir 导出的 $TMP/$SHARED
-# 向后兼容：未初始化时回退到旧版 results/ 布局
+# 路径基准统一：优先用 init_hackprobe_dir 导出的 $TMP/$SHARED。
+# 下面的 results/ 回退**仅用于未 init 的独立调用**（如单元测试）——
+# 正常流程必须先调 init_hackprobe_dir，那时 $SHARED 已指向 {WORK_ROOT}/shared。
 TMP_DIR="${TMP:-$WORK_DIR/results/tmp}"
 SHARED_DIR="${SHARED:-$WORK_DIR/results/_shared}"
 mkdir -p "$SHARED_DIR" "$SHARED_DIR/decisions"
@@ -30,10 +37,25 @@ echo "[merge] Target: $SHARED_DIR"
 # Wave-specific merge logic
 # ====================================
 
+# --partial 时把 $SHARED/partial/ 下同 basename 的文件也纳入输入
+# （超时 Agent 的部分数据由 record_failure 保全到那里）
+with_partial() {
+  local out=()
+  for f in "$@"; do
+    out+=("$f")
+    if [ "$PARTIAL" = "1" ]; then
+      local p="$SHARED_DIR/partial/$(basename "$f")"
+      [ -f "$p" ] && out+=("$p")
+    fi
+  done
+  printf '%s\n' "${out[@]}"
+}
+
 merge_unique_lines() {
   local output="$1"
   shift
-  local inputs=("$@")
+  local inputs=()
+  while IFS= read -r line; do inputs+=("$line"); done < <(with_partial "$@")
   > "$SHARED_DIR/${output}.tmp"
   for f in "${inputs[@]}"; do
     [ -f "$f" ] && cat "$f" >> "$SHARED_DIR/${output}.tmp"

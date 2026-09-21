@@ -102,11 +102,11 @@ else: target_type = "unknown"
 profile = {
     "classification": {"type": target_type, "confidence": "medium" if target_type=="unknown" else "high", "is_spa": is_spa},
     "infra": {"waf_likely": waf, "cdn": cdn, "host_ip": os.environ.get("HOST_IP","")},
-    "features": {"has_login": has_login, "has_register": has_register, "has_api_evidence": has_api, "has_form": has_form, "has_set_cookie": has_set_cookie},
+    "features": {"has_login": has_login, "has_register": has_register, "has_api_evidence": has_api, "has_form": has_form, "has_auth_cookie": has_auth_cookie},
     "httpx_tech": httpx_tech,
 }
-with open(f"{SHARED}/target_profile.json", "w") as f:
-    json.dump(profile, f, indent=2)
+with open(f"{SHARED}/target_profile.json", "w", encoding="utf-8") as f:
+    json.dump(profile, f, indent=2, ensure_ascii=False)
 
 print(f"[wave0] type={target_type} cdn={cdn} waf={'YES' if waf else 'no'} spa={is_spa} login={has_login} register={has_register}")
 print(f"[wave0] → {SHARED}/target_profile.json")

@@ -410,7 +410,7 @@ example.com/
 │   │   ├── httpx.json              # 技术栈指纹
 │   │   ├── urls_all.json           # 全量 URL
 │   │   ├── ports.json              # 端口扫描
-│   │   ├── auth_token.json         # 自动注册/手动输入 token（Step 0）
+│   │   ├── auth_tokens.json        # per-host 凭据（Step 0，按 host 分键）
 │   │   ├── oast.json               # OAST 域名状态
 │   │   ├── oast_callbacks.json     # OAST 回调记录
 │   │   ├── probe_hits.json         # 合并后探针命中

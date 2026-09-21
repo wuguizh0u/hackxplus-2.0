@@ -108,7 +108,7 @@ record_failure() {
   # === Preserve partial data ===
   # Agent writes to TMP file as it goes. Even on timeout, partial data exists.
   # Copy it to _shared/partial/ so merge can pick it up.
-  local partial_dir="results/_shared/partial"
+  local partial_dir="$SHARED/partial"
   mkdir -p "$partial_dir"
   local partial_lines=0 partial_bytes=0
   if [ -f "$output" ] && [ -s "$output" ]; then
@@ -126,7 +126,7 @@ record_failure() {
 
   python3 -c "
 import json, os
-f = 'results/_shared/failures.json'
+f = '$SHARED/failures.json'
 data = []
 if os.path.exists(f):
     with open(f) as fh: data = json.load(fh)
@@ -214,13 +214,13 @@ wait
 # 检查是否有 WAVE_ABORT
 ABORT_COUNT=$(python3 -c "
 import json
-d=json.load(open('results/_shared/failures.json'))
+d=json.load(open('$SHARED/failures.json'))
 print(sum(1 for f in d if f.get('effect')=='WAVE_ABORT'))
 " 2>/dev/null || echo 0)
 
 if [ "$ABORT_COUNT" -gt 0 ]; then
   echo "[wave] ⚠ $ABORT_COUNT critical agent(s) failed — partial data in _shared/partial/"
-  ls -la results/_shared/partial/ 2>/dev/null
+  ls -la $SHARED/partial/ 2>/dev/null
 fi
 
 # merge 时 --partial 允许缺失，同时读 partial/ 目录

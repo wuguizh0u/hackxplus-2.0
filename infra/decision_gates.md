@@ -1,6 +1,6 @@
 # Decision Gates — 策略决策门
 
-> 每个 Gate 输出 `gate1.json` + `gate1.md` 到 `results/_shared/decisions/`。JSON 机器可读（下游消费），MD 人类速览。
+> 每个 Gate 输出 `gate1.json` + `gate1.md` 到 `$SHARED/decisions/`。JSON 机器可读（下游消费），MD 人类速览。
 
 ---
 
@@ -10,39 +10,39 @@
 # === Q1: 强 WAF/CDN? ===
 WAF_DETECTED=0
 WAF_EVIDENCE=$(grep -oiE "Cloudflare|Akamai|Imperva|F5|FortiWeb|Barracuda|Sucuri|Incapsula|AWSALB" \
-  results/01_infra.md 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')
+  $SHARED/01_infra.md 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')
 [ -n "$WAF_EVIDENCE" ] && WAF_DETECTED=1
 
 # === Q2: 纯静态站? ===
 # 优先读 Wave 0 target_profile，比 URL count 更可靠
-PROFILED_TYPE=$(python3 -c "import json;print(json.load(open('results/_shared/target_profile.json')).get('classification',{}).get('type','unknown'))" 2>/dev/null || echo "unknown")
+PROFILED_TYPE=$(python3 -c "import json;print(json.load(open('$SHARED/target_profile.json')).get('classification',{}).get('type','unknown'))" 2>/dev/null || echo "unknown")
 if [ "$PROFILED_TYPE" = "static" ]; then
   STATIC_SITE=1
   echo "[gate1] Wave 0 confirmed static site — STATIC_SITE=1"
 else
-  URL_COUNT=$(wc -l < results/_shared/urls_all.txt 2>/dev/null | tr -d ' ')
+  URL_COUNT=$(wc -l < $SHARED/urls_all.txt 2>/dev/null | tr -d ' ')
   HAS_DYNAMIC=1
-  ! grep -qiE '/login|/api/|/admin|\.php|\.asp|graphql' results/_shared/urls_all.txt 2>/dev/null && HAS_DYNAMIC=0
+  ! grep -qiE '/login|/api/|/admin|\.php|\.asp|graphql' $SHARED/urls_all.txt 2>/dev/null && HAS_DYNAMIC=0
   STATIC_SITE=0
   [ "${URL_COUNT:-0}" -lt 20 ] && [ "$HAS_DYNAMIC" -eq 0 ] && STATIC_SITE=1
 fi
 
 # === Q3: API 密集? ===
-API_COUNT=$(grep -ciE '/api/|/graphql|/v[0-9]/' results/_shared/urls_all.txt 2>/dev/null || echo 0)
-API_SUBS=$(grep -ciE 'api\.|graphql\.|service\.' results/_shared/subs_all.txt 2>/dev/null || echo 0)
+API_COUNT=$(grep -ciE '/api/|/graphql|/v[0-9]/' $SHARED/urls_all.txt 2>/dev/null || echo 0)
+API_SUBS=$(grep -ciE 'api\.|graphql\.|service\.' $SHARED/subs_all.txt 2>/dev/null || echo 0)
 API_HEAVY=0
 [ "${API_COUNT:-0}" -gt 5 ] || [ "${API_SUBS:-0}" -gt 0 ] && API_HEAVY=1
 
 # === Q4: 登录/注册? ===
 HAS_LOGIN=0; HAS_REGISTER=0
-grep -qiE '/login|/signin|/auth' results/_shared/urls_all.txt 2>/dev/null && HAS_LOGIN=1
-grep -qiE '/register|/signup|/create-account' results/_shared/urls_all.txt 2>/dev/null && HAS_REGISTER=1
+grep -qiE '/login|/signin|/auth' $SHARED/urls_all.txt 2>/dev/null && HAS_LOGIN=1
+grep -qiE '/register|/signup|/create-account' $SHARED/urls_all.txt 2>/dev/null && HAS_REGISTER=1
 
 # === Q5: 技术栈 ===
 STACK_LABEL=$(python3 -c "
 import json
 try:
-  d=json.load(open('results/_shared/techstack.json'))
+  d=json.load(open('$SHARED/techstack.json'))
   parts=[v for v in [d.get('cms',''),d.get('backend',''),d.get('server',''),d.get('language','')] if v]
   print('|'.join(parts) if parts else 'unknown')
 except: print('unknown')
@@ -51,14 +51,14 @@ except: print('unknown')
 # === Q6: 高价值子域? ===
 # 从三个来源综合判断：关键词匹配 + 脆弱子域标记 + Host 碰撞命中
 HIGH_VALUE_COUNT=$(grep -ciE 'admin|dev|api|staging|internal|test|uat|ops|manage|portal|console|dashboard|grafana|jenkins|gitlab' \
-  results/_shared/subs_all.txt 2>/dev/null || echo 0)
+  $SHARED/subs_all.txt 2>/dev/null || echo 0)
 
 # 脆弱子域补充（old, temp, dev, test, abandoned, stage, qa, admin, manage 等）
-FRAGILE_COUNT=$(python3 -c "import json;print(json.load(open('results/_shared/fragile_subs.json')).get('fragile_count',0))" 2>/dev/null || echo 0)
-CRITICAL_FRAGILE=$(python3 -c "import json;d=json.load(open('results/_shared/fragile_subs.json'));print(d.get('critical_count',0))" 2>/dev/null || echo 0)
+FRAGILE_COUNT=$(python3 -c "import json;print(json.load(open('$SHARED/fragile_subs.json')).get('fragile_count',0))" 2>/dev/null || echo 0)
+CRITICAL_FRAGILE=$(python3 -c "import json;d=json.load(open('$SHARED/fragile_subs.json'));print(d.get('critical_count',0))" 2>/dev/null || echo 0)
 
 # Host 碰撞高价值命中
-HOSTCOLLISION_HITS=$(python3 -c "import json;print(json.load(open('results/_shared/hostcollision.json')).get('high_value_count',0))" 2>/dev/null || echo 0)
+HOSTCOLLISION_HITS=$(python3 -c "import json;print(json.load(open('$SHARED/hostcollision.json')).get('high_value_count',0))" 2>/dev/null || echo 0)
 
 # 综合高价值评分
 HIGH_VALUE_TOTAL=$((HIGH_VALUE_COUNT + FRAGILE_COUNT + HOSTCOLLISION_HITS))
@@ -67,8 +67,8 @@ elif [ "$HIGH_VALUE_TOTAL" -ge 1 ]; then WAVE2_SCOPE="REDUCED"
 else WAVE2_SCOPE="SKIP"; fi
 
 # === 输出 gate1.json（机器可读）===
-mkdir -p results/_shared/decisions
-python3 << PYEOF > results/_shared/decisions/gate1.json
+mkdir -p $SHARED/decisions
+python3 << PYEOF > $SHARED/decisions/gate1.json
 import json, os
 gate1 = {
   "timestamp": "$(date -Iseconds)",
@@ -85,7 +85,7 @@ print(json.dumps(gate1, indent=2, ensure_ascii=False))
 PYEOF
 
 # === 输出 gate1.md（人类速览）===
-cat > results/_shared/decisions/gate1.md << EOF
+cat > $SHARED/decisions/gate1.md << EOF
 ## Gate 1 — $(date +%H:%M:%S)
 
 | # | 问题 | 结果 | 影响 |
@@ -107,24 +107,24 @@ echo "[gate1] WAVE2_SCOPE=$WAVE2_SCOPE (keywords=$HIGH_VALUE_COUNT fragile=$FRAG
 
 ```bash
 # === Q1: 新深层资产? ===
-NEW_SUBS=$(wc -l < results/_shared/deep_subs.txt 2>/dev/null | tr -d ' ')
-NEW_DIRS=$(wc -l < results/_shared/deep_dirs.txt 2>/dev/null | tr -d ' ')
+NEW_SUBS=$(wc -l < $SHARED/deep_subs.txt 2>/dev/null | tr -d ' ')
+NEW_DIRS=$(wc -l < $SHARED/deep_dirs.txt 2>/dev/null | tr -d ' ')
 NEW_TARGETS=0
 [ "${NEW_SUBS:-0}" -gt 0 ] || [ "${NEW_DIRS:-0}" -gt 0 ] && NEW_TARGETS=1
 
 # === Q2: 弱口令命中? ===
-WEAK_CREDS=$(grep -c "SUCCESS" results/02.6_passwords.md 2>/dev/null || echo 0)
+WEAK_CREDS=$(grep -c "SUCCESS" $SHARED/passwords.json 2>/dev/null || echo 0)
 
 # === Q3 & Q4: 读 gate1.json（不 grep markdown）===
-HAS_REGISTER_G2=$(python3 -c "import json;d=json.load(open('results/_shared/decisions/gate1.json'));print(d['decisions']['Q4_AUTH']['HAS_REGISTER'])" 2>/dev/null || echo 0)
-WAF_SKIP_G2=$(python3 -c "import json;d=json.load(open('results/_shared/decisions/gate1.json'));print(d['decisions']['Q1_STRONG_WAF']['value'])" 2>/dev/null || echo 0)
+HAS_REGISTER_G2=$(python3 -c "import json;d=json.load(open('$SHARED/decisions/gate1.json'));print(d['decisions']['Q4_AUTH']['HAS_REGISTER'])" 2>/dev/null || echo 0)
+WAF_SKIP_G2=$(python3 -c "import json;d=json.load(open('$SHARED/decisions/gate1.json'));print(d['decisions']['Q1_STRONG_WAF']['value'])" 2>/dev/null || echo 0)
 
 AUTO_REGISTER=0; WAF_SKIP=0
 [ "$HAS_REGISTER_G2" = "1" ] && AUTO_REGISTER=1
 [ "$WAF_SKIP_G2" = "1" ] && WAF_SKIP=1
 
 # === 输出 gate2.json ===
-python3 << PYEOF > results/_shared/decisions/gate2.json
+python3 << PYEOF > $SHARED/decisions/gate2.json
 import json
 gate2 = {
   "timestamp": "$(date -Iseconds)",
@@ -144,7 +144,7 @@ print(json.dumps(gate2, indent=2, ensure_ascii=False))
 PYEOF
 
 # === 输出 gate2.md ===
-cat > results/_shared/decisions/gate2.md << EOF
+cat > $SHARED/decisions/gate2.md << EOF
 ## Gate 2 — $(date +%H:%M:%S)
 
 | # | 问题 | 结果 | 影响 |

@@ -1,6 +1,6 @@
 # Shared Data Layer — 共享数据层规范
 
-所有 Wave 产出写入结构化数据到 `results/_shared/`。下游消费者读 JSON，不复探。
+所有 Wave 产出写入结构化数据到 `$SHARED/`（= `{WORK_ROOT}/shared`）。下游消费者读 JSON，不复探。
 
 ## 目录结构
 
@@ -18,7 +18,10 @@
 │       ├── subs_all.json          # [{subdomain, ip, http_status, https_status}, ...]
 │       ├── hostcollision.json     # Host 碰撞结果
 │       ├── fragile_subs.json      # 脆弱子域标记
-│       ├── auth_token.json        # {token, type, cookie, auth_method}
+│       ├── auth_tokens.json       # per-host 凭据镜像 {host: {auth_type, token, ...}, "_meta": {...}}
+│       │                          #   ★ 必须按 host 分键。单 token 全局共用会造成"假认证"：
+│       │                          #   A 站 cookie 打 B 站时 B 站返 401 但框架认为已认证，
+│       │                          #   未授权类漏洞被静默吞掉。真相源在 SQLite credentials 表。
 │       ├── signals.json           # 信号提取结果 + matched_skills
 │       ├── probe_hits.json        # 探针命中结果
 │       ├── exploitation_plan.json # 去重合并后的利用计划

@@ -99,7 +99,7 @@ echo "[wave2] Activated: MODE=$MODE ($HIGH_VALUE high-value subs)"
 
 ### D6-Password 修改
 ```bash
-# 原: weak cred findings 直接写入 results/02.6_passwords.md
+# 原: weak cred findings 直接写入 $SHARED/passwords.json
 # 改: "$TMP/2_d6_passwords.json"
 # merge 时 → _shared/passwords.json
 # 弱口令命中自动写入 gate2.md 的 WEAK_CREDS 字段
@@ -145,14 +145,14 @@ import json, os
 
 # Load existing signals
 signals = {}
-if os.path.exists('results/_shared/signals.json'):
-    with open('results/_shared/signals.json') as f:
+if os.path.exists('$SHARED/signals.json'):
+    with open('$SHARED/signals.json') as f:
         signals = json.load(f)
 
 # Add Wave 2 discoveries
 new_subs = []
-if os.path.exists('results/_shared/deep_subs.txt'):
-    with open('results/_shared/deep_subs.txt') as f:
+if os.path.exists('$SHARED/deep_subs.txt'):
+    with open('$SHARED/deep_subs.txt') as f:
         new_subs = [l.strip() for l in f if l.strip()]
         # Check for high-value new subs
         for s in new_subs:
@@ -163,7 +163,7 @@ if os.path.exists('results/_shared/deep_subs.txt'):
 signals['wave2_complete'] = True
 signals['wave2_new_subs'] = len(new_subs)
 
-with open('results/_shared/signals.json', 'w') as f:
+with open('$SHARED/signals.json', 'w') as f:
     json.dump(signals, f, indent=2)
 
 print(f'[wave2] signals.json updated: {len(new_subs)} new subs, {len(signals.get(\"new_targets\",[]))} high-value')
@@ -177,7 +177,7 @@ print(f'[wave2] signals.json updated: {len(new_subs)} new subs, {len(signals.get
 ```bash
 echo "[wave2] Running Gate 2..."
 # 详见 infra/decision_gates.md Gate 2 部分
-# 输出: results/_shared/decisions/gate2.md
+# 输出: $SHARED/decisions/gate2.md
 
 # 核心决策:
 # NEW_TARGETS=N   → Wave 3 注入范围追加

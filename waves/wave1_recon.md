@@ -159,7 +159,7 @@ bash scripts/merge_results.sh --wave 1a
 
 ### B1-TechStack 关键修改
 ```bash
-# 原: httpx ... | tee results/_shared/httpx.json
+# 原: httpx ... | tee $SHARED/httpx.json
 # 改: httpx ... | tee "$TMP/1b_b1_httpx.json"
 # 原: echo "..." >> results/01_techstack.md
 # 改: echo "..." >> "$TMP/1b_b1_techstack.txt"
@@ -247,18 +247,18 @@ bash scripts/merge_results.sh --wave 1c
 ```bash
 echo "[wave1] All 3 sub-waves complete. Running Gate 1..."
 # signals.json v1 已在 Wave 1b merge 时生成
-cat results/_shared/signals.json | python3 -m json.tool 2>/dev/null
+cat $SHARED/signals.json | python3 -m json.tool 2>/dev/null
 
 # 检查脆弱子域和 Host 碰撞结果（影响 Gate 1 决策）
-FRAGILE_COUNT=$(python3 -c "import json;d=json.load(open('results/_shared/fragile_subs.json'));print(d.get('fragile_count',0))" 2>/dev/null || echo 0)
-HOSTCOLLISION_HITS=$(python3 -c "import json;d=json.load(open('results/_shared/hostcollision.json'));print(d.get('high_value_count',0))" 2>/dev/null || echo 0)
+FRAGILE_COUNT=$(python3 -c "import json;d=json.load(open('$SHARED/fragile_subs.json'));print(d.get('fragile_count',0))" 2>/dev/null || echo 0)
+HOSTCOLLISION_HITS=$(python3 -c "import json;d=json.load(open('$SHARED/hostcollision.json'));print(d.get('high_value_count',0))" 2>/dev/null || echo 0)
 echo "[gate1] Fragile subs: $FRAGILE_COUNT | Host collision high-value: $HOSTCOLLISION_HITS"
 
 # Gate 1: 6 问 + 2 自动决策（详见 infra/decision_gates.md）
 # 自动决策:
 #   - FRAGILE_COUNT > 0 → "高价值子域存在" = YES
 #   - HOSTCOLLISION_HITS >= 3 → "高价值子域存在" = YES  
-source infra/decision_gates.md  # runs Gate 1 logic → results/_shared/decisions/gate1.json
+source infra/decision_gates.md  # runs Gate 1 logic → $SHARED/decisions/gate1.json
 ```
 
 ---
