@@ -9,14 +9,36 @@ description: "AI-assisted black-box security audit. Wave-driven architecture: re
 
 Before ANY action, ask: **"You are about to run an active security audit against `<URL>`. Are you sure you want to proceed?"** Only proceed after explicit confirmation.
 
-## STEP 0 — Directory Init + Tool Discovery (MANDATORY)
+## STEP 0 — Directory Init + Target Registration (MANDATORY)
 
 ```bash
 source infra/directory_setup.md
-init_hackprobe_dir "<URL>"
+init_hackprobe_dir "<URL>"          # 导出 WORK_ROOT/TMP/SHARED/AUDIT_LOG/HACKXPLUS_DB
 source scripts/discover_tools.sh   # 导出 $HACKPROBE_NMAP/$HACKPROBE_SQLMAP/$HACKPROBE_NUCLEI 等
 cd "$WORK_ROOT"
+
+# 落盘 target_id（后续所有 Wave 从这里读）
+TARGET_ID=$(cat "$SHARED/target_id.txt" 2>/dev/null || echo "")
+mkdir -p "$SHARED"
 ```
+
+**然后注册主目标到 SQLite（真相源）** —— 调 MCP 工具 `asset_create_target`：
+
+| 参数 | 值 |
+|------|-----|
+| `url` | `"<URL>"`（完整 URL，含 scheme） |
+| `scope` | `"in-scope"` |
+| `auth_mode` | `"unauthenticated"`（Gate 2 后回填真实值） |
+
+拿到返回的 `target_id` 后落盘：
+
+```bash
+echo "<返回的 target_id>" > "$SHARED/target_id.txt"
+```
+
+> **契约**：本步失败不阻塞 Wave 1，但 `$SHARED/target_id.txt` 缺失时
+> Wave 3 必须**先补调** `asset_create_target`。
+> **SQLite 是唯一真相源**，`$SHARED/*.json` 只是 Wave 间的传递介质。
 
 `discover_tools.sh` 自动发现 `D:/1渗透tools/` 下 40+ 工具，导出为 `$HACKPROBE_*` 环境变量。找不到的工具标记 skip，不阻塞流程。后续所有 Wave 优先用 `$HACKPROBE_*` 调工具，不存在再 curl 手工。
 

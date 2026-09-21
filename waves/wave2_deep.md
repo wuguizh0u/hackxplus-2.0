@@ -132,6 +132,30 @@ fi
 
 ---
 
+## Wave 2 完成 → 风险回标（★ 接线点）
+
+> Wave 2 发现的新资产要**回写资产库**，否则 Wave 3 取不到、coverage 矩阵漏项。
+
+**步骤 1**：`$SHARED/deep_subs.txt` 里的**新子域** → 逐个调 `asset_create_target`
+（同 Wave 1 的规则），把返回 id 追加进 `$SHARED/sub_target_map.json`。
+
+**步骤 2**：`$SHARED/deep_dirs.txt` / `$SHARED/deep_js_endpoints.txt` 里的**新路径**
+→ 先 `asset_inject_endpoint` 建 endpoint，再 `asset_annotate_endpoint` 标风险。
+
+**步骤 3**：`nuclei.json` 命中的路径 → 对应 endpoint 调 `asset_annotate_endpoint`
+追加类别标签并提优先级。
+
+调用示例（注意 `risk_tags` 是 **JSON 字符串**）：
+
+```
+asset_annotate_endpoint(endpoint_id=<id>, risk_tags="[\"authbypass\"]", priority=3)
+```
+
+> ⚠️ `update_endpoint` 的 `risk_tags` 是**整体替换**，不是追加。
+> 追加前先调 `asset_get_asset_tree` 读现有 tags，合并后整体写回。
+
+---
+
 ## Wave 2 完成 → merge
 
 ```bash

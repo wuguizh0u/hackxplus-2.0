@@ -1,5 +1,78 @@
 # Signal Router — 信号→技能映射表
 
+---
+
+## ★ SKILL_ALIAS — 短名 → hack-skills 目录名映射
+
+> **为什么必须要有这张表**：MCP `router_match`（`server/signal_router.py`）返回的是
+> **短名**（`lfi` / `idor` / `403-bypass`），而 hack-skills 实际目录是**长名**
+> （`path-traversal-lfi` / `idor-broken-object-authorization`）。
+> 实测 **67 个短名里只有 2 个能精确匹配目录名**（`subdomain-takeover`、`race-condition`），
+> 其余都需要映射 —— 否则技能路径拼不出来，深度利用加载不到。
+
+| 短名（代码产出） | hack-skills 目录名 |
+|---|---|
+| `deserialization` | `deserialization-insecure` |
+| `ghost-bits` | `ghost-bits-cast-attack` |
+| `jndi` | `jndi-injection` |
+| `el-injection` | `expression-language-injection` |
+| `lfi` | `path-traversal-lfi` |
+| `upload` | `upload-insecure-files` |
+| `403-bypass` | `401-403-bypass-techniques` |
+| `ssti` | `ssti-server-side-template-injection` |
+| `csrf` | `csrf-cross-site-request-forgery` |
+| `idor` | `idor-broken-object-authorization` |
+| `prototype-pollution` | `prototype-pollution` ✓ |
+| `prototype-pollution-advanced` | `prototype-pollution-advanced` ✓ |
+| `nosql` | `nosql-injection` |
+| `graphql` | `graphql-and-hidden-parameters` |
+| `subdomain-takeover` | `subdomain-takeover` ✓ |
+| `source-code-leak` | `insecure-source-code-management` |
+| `waf-bypass` | `waf-bypass-techniques` |
+| `http2` | `http2-specific-attacks` |
+| `jwt-oauth` | `jwt-oauth-token-attacks` |
+| `authbypass` | `authbypass-authentication-flaws` |
+| `race-condition` | `race-condition` ✓ |
+| `business-logic` | `business-logic-vulnerabilities` |
+| `ssrf` | `ssrf-server-side-request-forgery` |
+| `dns-rebinding` | `dns-rebinding-attacks` |
+| `cmdi` | `cmdi-command-injection` |
+| `sqli-deep` / `sqli-error` | `sqli-sql-injection` |
+| `xss` | `xss-cross-site-scripting` |
+| `xxe` | `xxe-xml-external-entity` |
+| `crlf` | `crlf-injection` |
+| `open-redirect` | `open-redirect` ✓ |
+| `type-juggling` | `type-juggling` ✓ |
+| `xslt-injection` | `xslt-injection` ✓ |
+| `http-host-header` | `http-host-header-attacks` |
+| `websocket` | `websocket-security` |
+| `cache-deception` | `web-cache-deception` |
+| `clickjacking` | `clickjacking` ✓ |
+| `csp-bypass` | `csp-bypass-advanced` |
+| `email-header` | `email-header-injection` |
+| `csv-formula` | `csv-formula-injection` |
+| `dangling-markup` | `dangling-markup-injection` |
+| `http-parameter-pollution` | `http-parameter-pollution` ✓ |
+| `api-bola` | `api-authorization-and-bola` |
+| `api-recon` | `api-recon-and-docs` |
+| `weak-password` | （无独立目录，走 `authbypass-authentication-flaws`） |
+| `idfd` | （代码拼写错误，实为 `idor`，见下） |
+
+> **`idfd`** 是 `signal_router.py:31-32` 的拼写错误（应为 `idor-broken-object-authorization`）。
+> 映射时按 `idor` 处理。**建议直接修 `signal_router.py`**。
+
+**用法**（加载技能前）：
+
+```bash
+# 伪代码：把 router_match 返回的短名映射到目录名
+RAW_SKILL="lfi"
+SKILL_DIR=$(grep -E "^\| \`$RAW_SKILL\` " "$(dirname "$0")/signal_router.md" \
+            | sed -E 's/.*\| `([^`]+)`[^|]*\|$/\1/' | sed 's/ ✓//')
+[ -d ".claude/skills/hack-skills/skills/$SKILL_DIR" ] || SKILL_DIR="$RAW_SKILL"
+```
+
+---
+
 > **Wave 3 Step 2 执行。** 从 Wave 1/2 产出提取信号，匹配 hack-skills。信号→探针的触发逻辑在 `probes/tier2_signal.md` 的 `run_probes_tier2()` 中以 bash 条件直接处理。通用探针见 `probes/tier1_universal.md`。
 
 ---

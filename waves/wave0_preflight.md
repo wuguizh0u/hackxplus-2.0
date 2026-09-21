@@ -1,6 +1,21 @@
 # Wave 0 — Pre-flight 威胁建模（10-15 秒，不阻塞 Wave 1）
 
-> Wave 1 Agent 启动后读 `_shared/target_profile.json`，存在就用，不存在按默认策略。
+> Wave 1 Agent 启动后读 `$SHARED/target_profile.json`，存在就用，不存在按默认策略。
+
+## Step 0-0 — 续轮状态恢复（★ 接线点）
+
+**优先从 SQLite 恢复，文件层只作降级。**
+
+1. 若 `$SHARED/target_id.txt` 存在 → 调 MCP `session_resume(target_id=<id>)`，
+   读返回的 `pending[]` 判断是**续轮**还是**首轮**。
+2. 若 `count > 0` 且 `$HACKXPLUS_CHECKPOINT` 存在 → 再调
+   `session_resume(target_id, checkpoint_path="$HACKXPLUS_CHECKPOINT")`
+   恢复轮次状态（`round_no` / `turns_used` / `last_endpoint_id`）。
+3. 若 `$SHARED/target_profile.json` 存在但 SQLite 无记录 → 用文件层（降级路径）。
+4. 都没有 → 全新目标，正常往下走。
+
+> 也可直接调 `asset_get_asset_tree(target_id)` 一次拿全：`endpoints[]` /
+> `vulns[]` / `credentials[]` / `stats` / `next_pending[]`。
 
 ## Step 0a — 首页特征 + 0b 技术栈 + 0c DNS/WAF
 

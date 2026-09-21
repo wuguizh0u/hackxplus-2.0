@@ -246,6 +246,60 @@ bash scripts/merge_results.sh --wave 1c
 
 ---
 
+## Wave 1 完成 → 资产入库（★ 接线点）
+
+> **每个活子域一个 target，每条带参 URL 一个 endpoint。**
+> 这是"多子域不漏测"的落地点 —— 后续 Wave 3 从资产库取 endpoint 逐个打，
+> 而不是只打主域。
+
+**步骤 1：为每个活子域调 `asset_create_target`**
+
+数据源 `$SHARED/subs_all.txt`（或 `subs_all.json`）。对 HTTP 探活为
+200/301/302/401/403 的子域，构造完整 URL（优先 `https://{sub}`，失败降级 `http://`），
+逐个调用：
+
+| 参数 | 值 |
+|------|-----|
+| `url` | `"https://{sub}"` |
+| `scope` | `"in-scope"` |
+| `auth_mode` | `"unauthenticated"` |
+
+把返回的 `target_id` 汇总成 host→id 映射，落盘供后续 Wave 使用：
+
+```bash
+# 期望产出 $SHARED/sub_target_map.json = {"admin.t.com": 2, "api.t.com": 3, ...}
+```
+
+**步骤 2：为每条 URL 调 `asset_inject_endpoint`**
+
+读 `$SHARED/urls_all.txt`，按 host 归属到对应 `target_id`
+（主域用 `$SHARED/target_id.txt`，子域查 `sub_target_map.json`）：
+
+| 参数 | 值 |
+|------|-----|
+| `target_id` | 该 URL 所属 host 的 id |
+| `path` | URL 的 path + query（不含 scheme/host） |
+| `method` | `"GET"` |
+| `params` | **JSON 字符串**，如 `"[\"id\",\"q\"]"` |
+| `risk_tags` | **JSON 字符串**，如 `"[\"sqli\",\"xss\"]"` |
+
+> ⚠️ **`params` / `risk_tags` 必须传 JSON 字符串**，不能传数组字面量。
+> MCP schema 把它们声明为 `"type":"string"`，handler 内部 `json.loads` 解析。
+
+**步骤 3：注入量控制**（`urls_all.txt` 可能上万条，按此裁剪）
+
+- 保留所有含 query 参数的 URL（有价值）
+- 保留非 2xx 但非 404 的路径
+- **丢弃静态资源**：`.js .css .png .jpg .jpeg .gif .woff .woff2 .ttf .map .svg .ico`
+- 纯 200 无参数的 HTML 页面，只保留前 200 条
+
+产出 `$SHARED/ingest_report.json` = `{"targets_created": N, "endpoints_injected": M}`。
+
+> `inject_endpoint` 按 `(target_id, method, path)` 去重，重复注入会**合并**
+> 新的 params/risk_tags（不会丢数据），可安全重跑。
+
+---
+
 ## Wave 1 完成 → Gate 1
 
 ```bash
