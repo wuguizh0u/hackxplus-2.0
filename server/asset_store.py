@@ -76,9 +76,11 @@ CREATE TABLE IF NOT EXISTS credentials (
     target_id INTEGER,
     username TEXT,
     password TEXT,
-    source TEXT DEFAULT 'manual',  -- weak_pwd / register / leak / manual
+    source TEXT DEFAULT 'manual',  -- weak_pwd / register / leak / manual / wave3_step0
     login_url TEXT,
     note TEXT,
+    auth_type TEXT DEFAULT 'password',  -- password / bearer / cookie / none
+    token TEXT DEFAULT '',              -- bearer token 或完整 cookie 字符串
     created_at INTEGER
 );
 
@@ -146,6 +148,21 @@ class AssetStore:
     def _init_db(self) -> None:
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            self._migrate(c)
+
+    def _migrate(self, c: sqlite3.Connection) -> None:
+        """幂等列迁移. CREATE TABLE IF NOT EXISTS 不会给已存在的表加列, 这里补. """
+        migrations = {
+            "credentials": {
+                "auth_type": "TEXT DEFAULT 'password'",
+                "token": "TEXT DEFAULT ''",
+            },
+        }
+        for table, cols in migrations.items():
+            existing = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+            for col, decl in cols.items():
+                if col not in existing:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     # ── targets ────────────────────────────────────────────────────────────
     def create_target(self, url: str, scope: str = "in-scope",
@@ -166,16 +183,39 @@ class AssetStore:
                         params: Optional[List[str]] = None,
                         func_desc: str = "", risk_tags: Optional[List[str]] = None,
                         priority: int = 1, source: str = "manual") -> int:
-        """注入一个新端点. 相同 (target_id, method, path) 已存在则返回现有 id (幂等). """
+        """注入一个新端点. 相同 (target_id, method, path) 已存在则 **合并** 新信息.
+
+        合并语义 (重要): 重复注入不再静默丢弃 params/risk_tags/func_desc —
+        旧值与新值取并集写回, 并为新增的 risk_tags 补建 coverage pending 行.
+        批量接线时同一 endpoint 会被多个 Wave 用不同元数据注入多次, 早先的
+        "return row['id']" 会把这些增量全部损失掉.
+        """
         tgt = self.get_target(target_id)
         if not tgt:
             raise ValueError(f"target {target_id} not found — 先 create_target 再 inject_endpoint")
         with self._conn() as c:
             row = c.execute(
-                "SELECT id FROM endpoints WHERE target_id=? AND method=? AND path=?",
+                "SELECT id, params, risk_tags FROM endpoints"
+                " WHERE target_id=? AND method=? AND path=?",
                 (target_id, method, path)).fetchone()
             if row:
-                return row["id"]
+                eid = row["id"]
+                old_params = set(json.loads(row["params"] or "[]"))
+                old_tags = set(json.loads(row["risk_tags"] or "[]"))
+                merged_params = sorted(old_params | set(params or []))
+                merged_tags = sorted(old_tags | set(risk_tags or []))
+                c.execute(
+                    "UPDATE endpoints SET params=?, risk_tags=?,"
+                    " func_desc=COALESCE(NULLIF(?,''), func_desc),"
+                    " priority=MAX(priority,?) WHERE id=?",
+                    (json.dumps(merged_params), json.dumps(merged_tags),
+                     func_desc, priority, eid))
+                # 新增的 risk_tags 也要补建 coverage (否则覆盖矩阵漏项)
+                for vt in sorted(set(risk_tags or []) - old_tags):
+                    c.execute(
+                        "INSERT OR IGNORE INTO coverage(endpoint_id, vuln_type, status, updated_at)"
+                        " VALUES(?,?,?,?)", (eid, vt, COV_PENDING, int(time.time())))
+                return eid
             cur = c.execute(
                 "INSERT INTO endpoints(target_id, path, method, params, func_desc,"
                 " risk_tags, priority, test_status, source, created_at)"
@@ -268,6 +308,44 @@ class AssetStore:
         with self._conn() as c:
             return [dict(r) for r in c.execute(
                 "SELECT * FROM credentials WHERE target_id=?", (target_id,))]
+
+    def set_auth(self, target_id: int, auth_type: str, token: str,
+                 login_url: str = "", username: str = "",
+                 source: str = "wave3_step0") -> int:
+        """写入/覆盖该 target 的认证凭据. auth_type: bearer / cookie / password / none.
+
+        同一 target 已有非 none 凭据时原地更新, 避免每次续轮都插入重复行.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id FROM credentials WHERE target_id=? AND login_url=?"
+                " ORDER BY id DESC LIMIT 1", (target_id, login_url)).fetchone()
+            if row:
+                c.execute(
+                    "UPDATE credentials SET auth_type=?, token=?, username=?, source=?"
+                    " WHERE id=?", (auth_type, token, username, source, row["id"]))
+                return row["id"]
+            cur = c.execute(
+                "INSERT INTO credentials(target_id, username, password, source,"
+                " login_url, note, auth_type, token, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (target_id, username, "", source, login_url, "",
+                 auth_type, token, int(time.time())))
+            return cur.lastrowid
+
+    def get_auth_for_target(self, target_id: int) -> Dict:
+        """返回该 target 可用的认证头. 无凭据时返回 {}.
+
+        按行序取第一条有效凭据 —— 这就是 per-host 隔离的落点: 每个 target
+        有自己的 target_id, 因此 A 子域的 cookie 永远不会发给 B 子域.
+        """
+        for c in self.list_credentials(target_id):
+            at, tk = c.get("auth_type"), c.get("token")
+            if at == "bearer" and tk:
+                return {"Authorization": f"Bearer {tk}"}
+            if at == "cookie" and tk:
+                return {"Cookie": tk}
+        return {}
 
     # ── traffic ────────────────────────────────────────────────────────────
     def add_traffic(self, endpoint_id: Optional[int], method: str, url: str,

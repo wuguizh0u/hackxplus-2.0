@@ -28,10 +28,28 @@ source infra/directory_setup.md  # loads heartbeat() helper
 heartbeat "wave1" "START" ""
 
 # === Read Wave 0 pre-flight profile (if available) ===
+# 路径经 argv 传入 —— 含中文的绝对路径不能展开进 Python 源码
+# （git-bash 无 LANG 时按 GBK 处理，展开后路径被写坏 → 静默回落默认值）
+read_profile() {
+  python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[2], encoding="utf-8"))
+    k = sys.argv[1]
+    if k == "type":
+        print(d.get("classification", {}).get("type", "unknown"))
+    elif k == "waf":
+        print(d.get("infra", {}).get("waf_likely", False))
+    else:
+        print(d.get("classification", {}).get("is_spa", False))
+except Exception:
+    print({"type": "unknown", "waf": "False", "spa": "False"}[sys.argv[1]])' \
+    "$1" "$SHARED/target_profile.json"
+}
+
 if [ -f "$SHARED/target_profile.json" ]; then
-  TARGET_TYPE=$(python3 -c "import json;print(json.load(open('$SHARED/target_profile.json')).get('classification',{}).get('type','unknown'))" 2>/dev/null || echo "unknown")
-  TARGET_WAF=$(python3 -c "import json;print(json.load(open('$SHARED/target_profile.json')).get('infra',{}).get('waf_likely',False))" 2>/dev/null || echo "False")
-  TARGET_SPA=$(python3 -c "import json;print(json.load(open('$SHARED/target_profile.json')).get('classification',{}).get('is_spa',False))" 2>/dev/null || echo "False")
+  TARGET_TYPE=$(read_profile type)
+  TARGET_WAF=$(read_profile waf)
+  TARGET_SPA=$(read_profile spa)
   echo "[wave1] Pre-flight: type=$TARGET_TYPE waf=$TARGET_WAF spa=$TARGET_SPA"
 else
   TARGET_TYPE="unknown"

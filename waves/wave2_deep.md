@@ -20,7 +20,20 @@ heartbeat "wave2" "START" ""
 ## 激活判断
 
 ```bash
-HIGH_VALUE=$(python3 -c "import json;d=json.load(open('$SHARED/decisions/gate1.json'));print(d['decisions']['Q6_HIGH_VALUE_SUBS']['count'])" 2>/dev/null || echo 0)
+# 读 Gate 1 决策（路径经 argv 传入 —— 含中文的绝对路径不能展开进 Python 源码，
+# 否则 git-bash 按 GBK 处理会把路径写坏，导致静默 KeyError 回落为 0）
+read_gate1() {
+  python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))["decisions"]["Q6_HIGH_VALUE_SUBS"]
+    print(d.get("total", 0) if sys.argv[2] == "total" else d.get("WAVE2_SCOPE", "FULL"))
+except Exception:
+    print(0 if sys.argv[2] == "total" else "FULL")' "$SHARED/decisions/gate1.json" "$1"
+}
+
+# 字段名必须是 total —— decision_gates.md:81 写的就是 total
+# （旧代码读 'count' 会 KeyError → 被 || echo 0 吞掉 → HIGH_VALUE 恒为 0 → Wave 2 永远跳过）
+HIGH_VALUE=$(read_gate1 total)
 
 if [ "${HIGH_VALUE:-0}" -eq 0 ]; then
   echo "[wave2] ⏭ SKIPPED — No high-value subdomains."
@@ -28,7 +41,7 @@ if [ "${HIGH_VALUE:-0}" -eq 0 ]; then
   exit 0
 fi
 
-MODE=$(python3 -c "import json;d=json.load(open('$SHARED/decisions/gate1.json'));print(d['decisions']['Q6_HIGH_VALUE_SUBS']['WAVE2_SCOPE'])" 2>/dev/null || echo "FULL")
+MODE=$(read_gate1 scope)
 echo "[wave2] Activated: MODE=$MODE ($HIGH_VALUE high-value subs)"
 ```
 
@@ -98,17 +111,14 @@ echo "[wave2] Activated: MODE=$MODE ($HIGH_VALUE high-value subs)"
 
 ```bash
 # Read STRONG_WAF decision from Gate 1 structured output (gate1.json)
-# This replaces the old "grep gate1.md" approach — gate1.json is the machine-readable source.
-STRONG_WAF=$(python3 -c "
-import json
+# gate1.json 的 decisions 是 **对象** 不是数组: {"Q1_STRONG_WAF": {"value": 0|1, ...}}
+# 旧代码把 decisions 当数组遍历取 dec['id']/dec['decision_value'] → 永远失败 → 降级不生效
+STRONG_WAF=$(python3 -c 'import json,sys
 try:
-  d=json.load(open('results/_shared/decisions/gate1.json'))
-  for dec in d['decisions']:
-    if dec['id'] == 'Q1':
-      print(dec['decision_value'])
-      break
-except: print(0)
-" 2>/dev/null)
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    print(1 if d.get("decisions", {}).get("Q1_STRONG_WAF", {}).get("value") else 0)
+except Exception:
+    print(0)' "$SHARED/decisions/gate1.json" 2>/dev/null)
 
 if [ "$STRONG_WAF" = "1" ]; then
   echo "[wave2] WAF detected — reducing intensity:"

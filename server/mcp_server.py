@@ -10,16 +10,20 @@ mcp_server.py — hackxplus MCP Server 入口
 MCP 协议走 stdio (默认). 参考文章同款架构: agent 通过 MCP 工具读写资产库.
 
 工具清单:
+    asset_create_target     建目标 (每个活子域一个)
     asset_get_asset_tree    恢复/查看完整渗透状态 (续轮第一指令)
     asset_inject_endpoint   注入新发现的接口
     asset_annotate_endpoint 接口风险标注
     asset_record_vuln       漏洞入库 (触发五层门禁)
     asset_update_coverage   更新覆盖矩阵
-    probe_run               执行探针
+    asset_set_auth          写入 per-host 认证凭据
     router_match            信号→技能映射
     gate_override_check     决策门覆写检测
     session_checkpoint      写续轮点
     session_resume          恢复 pending 端点
+
+注: 探针不经 MCP 执行 —— 走 bash (probes/tier1_universal.sh 等 + run_probes_tier1/2)。
+    探针命中后由 skill 层调 asset_update_coverage 回写覆盖矩阵。
 """
 
 import argparse
@@ -29,7 +33,10 @@ from typing import Dict, List, Optional
 
 from asset_store import AssetStore
 from gate_chain import GateChain, Vuln
-from probe_engine import ProbeEngine
+# probe_engine 已停用：探针改回 bash（probes/*.sh + run_probes_tier1/2）。
+# JSON 化路径经评估放弃 —— 声明式 schema 无法表达 bash 版的多步判定/响应头/
+# 路径注入等条件，硬转会导致误报率上升（假命中把省下的 token 又吃回去）。
+# 文件保留在 server/probe_engine.py 备查，不再 import。
 from signal_router import route_signals, check_gate_override
 from runner import Runner, RoundState
 
@@ -52,7 +59,6 @@ class HackXPlusCore:
     def __init__(self, db_path: str = DB_PATH):
         self.store = AssetStore(db_path)
         self.gate = GateChain()
-        self.probe = ProbeEngine()
         self.runner = Runner()
         self._session: Optional[RoundState] = None
         self._seen_keys: set = set()
@@ -94,13 +100,20 @@ class HackXPlusCore:
         self.store.update_coverage(endpoint_id, vuln_type, status)
         return {"ok": True}
 
-    # 探针
-    def probe_run(self, url: str, tier: int = 1,
-                  params: Optional[List[str]] = None,
-                  auth_token: Optional[str] = None) -> Dict:
-        headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else None
-        hits = self.probe.run(url, tier=tier, params=params, auth_headers=headers)
-        return {"hits": hits, "count": len(hits)}
+    def asset_set_auth(self, target_id: int, auth_type: str, token: str,
+                       login_url: str = "", username: str = "") -> Dict:
+        """写入 per-host 认证凭据。
+
+        auth_type: bearer / cookie / password / none
+        关键：凭据按 target 隔离 —— A 子域的 cookie 绝不会发给 B 子域。
+             取不到凭据的 host 一律以 unauthenticated 跑（防"假认证"吞掉未授权漏洞）。
+        """
+        cid = self.store.set_auth(target_id, auth_type, token,
+                                  login_url=login_url, username=username)
+        return {"ok": True, "credential_id": cid}
+
+    # 探针：已改回 bash（probes/*.sh + run_probes_tier1/2），不再经 MCP 执行。
+    # 探针命中后回写覆盖矩阵用 asset_update_coverage。
 
     # 路由
     def router_match(self, tech_stack: Optional[List[str]] = None,
@@ -177,11 +190,12 @@ def run_mcp(db_path: str) -> None:
                           "properties": {"endpoint_id": {"type": "integer"},
                                          "vuln_type": {"type": "string"}, "status": {"type": "string"}},
                           "required": ["endpoint_id", "vuln_type", "status"]}),
-        Tool(name="probe_run", description="执行探针 (tier 1/2/3)",
+        Tool(name="asset_set_auth", description="写入 per-host 认证凭据 (bearer/cookie/password/none)",
              inputSchema={"type": "object",
-                          "properties": {"url": {"type": "string"}, "tier": {"type": "integer"},
-                                         "params": {"type": "string"}, "auth_token": {"type": "string"}},
-                          "required": ["url"]}),
+                          "properties": {"target_id": {"type": "integer"},
+                                         "auth_type": {"type": "string"}, "token": {"type": "string"},
+                                         "login_url": {"type": "string"}, "username": {"type": "string"}},
+                          "required": ["target_id", "auth_type", "token"]}),
         Tool(name="router_match", description="信号→技能映射",
              inputSchema={
                  "type": "object",
@@ -223,9 +237,9 @@ def run_mcp(db_path: str) -> None:
             a.get("description", ""), json.loads(a.get("evidence") or "{}")), ensure_ascii=False),
         "asset_update_coverage": lambda a: json.dumps(core.asset_update_coverage(
             int(a["endpoint_id"]), a["vuln_type"], a["status"]), ensure_ascii=False),
-        "probe_run": lambda a: json.dumps(core.probe_run(
-            a["url"], int(a.get("tier", 1)),
-            json.loads(a.get("params") or "[]"), a.get("auth_token") or None), ensure_ascii=False),
+        "asset_set_auth": lambda a: json.dumps(core.asset_set_auth(
+            int(a["target_id"]), a["auth_type"], a["token"],
+            a.get("login_url", ""), a.get("username", "")), ensure_ascii=False),
         "router_match": lambda a: json.dumps(core.router_match(
             json.loads(a.get("tech_stack") or "[]"), a.get("attack_text", ""),
             a.get("infra_text", ""), json.loads(a.get("feedback_hits") or "[]")), ensure_ascii=False),
