@@ -21,31 +21,74 @@ esac
 # --- PATH setup (common locations) ---
 export PATH="$HOME/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH"
 
+# --- Validation: reject same-name-different-tool collisions ---
+# 只对已知会撞名的工具校验，其余一律放行（避免误伤）。
+_tool_is_valid() {
+  local name="$1" path="$2"
+  case "$name" in
+    httpx)
+      # 真 ProjectDiscovery httpx: 帮助含 -json / -version 打印 projectdiscovery 横幅
+      # 假 Python httpx CLI:      -h 报 "Option '-h' requires 2 arguments"，两者皆无
+      local out
+      out=$("$path" -h 2>&1 || true)
+      case "$out" in *"-json"*) return 0 ;; esac
+      out=$("$path" -version 2>&1 || true)
+      case "$out" in *rojectdiscovery*) return 0 ;; esac
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# --- Search a single base dir at configured depth ---
+# 返回全部匹配（非 head -1），便于跳过未过校验的命中继续找下一个。
+_search_base() {
+  local base="$1" name="$2" ext="$3"
+  local maxdepth="${HACKPROBE_TOOL_MAXDEPTH:-3}"
+  [ -d "$base" ] || return 0
+  find "$base" -maxdepth "$maxdepth" -type f \
+    \( -name "${name}${ext}" -o -name "${name}.py" -o -name "$name" \) 2>/dev/null
+}
+
 # --- Find tool: universal lookup ---
 find_tool() {
   local name="$1"
-  # 1. System PATH
-  if command -v "$name" >/dev/null 2>&1; then
-    command -v "$name"
-    return 0
-  fi
+  local ext=""
+  [ "$IS_WINDOWS" = "1" ] && ext=".exe"
 
-  # 2. Custom base directory (if set)
-  if [ -n "${HACKPROBE_TOOL_BASE:-}" ] && [ -d "$HACKPROBE_TOOL_BASE" ]; then
-    # Try with .exe on Windows, without on Unix
-    local ext=""
-    [ "$IS_WINDOWS" = "1" ] && ext=".exe"
-    local found
-    found=$(find "$HACKPROBE_TOOL_BASE" -maxdepth 3 -type f \( -name "${name}${ext}" -o -name "${name}.py" -o -name "$name" \) 2>/dev/null | head -1)
-    if [ -n "$found" ]; then
-      echo "$found"
+  # 1. System PATH（须过校验 —— 防 httpx 被解析成 Python 同名包）
+  local p
+  if p=$(command -v "$name" 2>/dev/null); then
+    if _tool_is_valid "$name" "$p"; then
+      echo "$p"
       return 0
     fi
+    echo "  [skip] $name: PATH 命中 $p 但未通过校验（同名异工具），继续搜索" >&2
+  fi
+
+  # 2. 自定义目录（支持多目录：Windows 用 ';'，Unix 用 ':' 分隔）
+  if [ -n "${HACKPROBE_TOOL_BASE:-}" ]; then
+    local sep=';' bases base found
+    [ "$IS_WINDOWS" = "1" ] || sep=':'
+    local _old_ifs="$IFS"
+    IFS="$sep" read -ra bases <<< "$HACKPROBE_TOOL_BASE"
+    IFS="$_old_ifs"
+    for base in ${bases[@]+"${bases[@]}"}; do
+      [ -n "$base" ] || continue
+      while IFS= read -r found; do
+        [ -n "$found" ] || continue
+        if _tool_is_valid "$name" "$found"; then
+          echo "$found"
+          return 0
+        fi
+      done < <(_search_base "$base" "$name" "$ext")
+    done
   fi
 
   # 3. Common Unix locations (for safety)
+  local loc
   for loc in /usr/bin /usr/local/bin /opt/homebrew/bin "$HOME/go/bin" "$HOME/.local/bin" "$HOME/bin"; do
-    if [ -f "$loc/$name" ]; then
+    if [ -f "$loc/$name" ] && _tool_is_valid "$name" "$loc/$name"; then
       echo "$loc/$name"
       return 0
     fi
@@ -55,12 +98,19 @@ find_tool() {
 }
 
 # --- Declare tool: export HACKPROBE_<NAME> ---
+# 计数用 _DECLARED_*，供 SUMMARY 计算真实命中率
+_DECLARED_TOTAL=0
+_DECLARED_FOUND=0
 declare_tool() {
   local tool_name="$1"
   local var_name="HACKPROBE_$(echo "$tool_name" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
   local tool_path
-  if tool_path=$(find_tool "$tool_name" 2>/dev/null); then
+  _DECLARED_TOTAL=$((_DECLARED_TOTAL + 1))
+  # 注意：不能加 2>/dev/null —— find_tool 的 [skip] 诊断写在 stderr，
+  # 吞掉就看不到「找到了但被校验拒绝」这个关键信息。find 自身已静音。
+  if tool_path=$(find_tool "$tool_name"); then
     export "$var_name=$tool_path"
+    _DECLARED_FOUND=$((_DECLARED_FOUND + 1))
     echo "  ✅  $tool_name → $tool_path"
   else
     unset "$var_name"
@@ -162,13 +212,20 @@ fi
 # ============================================================
 # SUMMARY
 # ============================================================
-TOTAL=0
-FOUND=0
-for var in $(set | grep '^HACKPROBE_' | grep -v '_IMPORTED' | cut -d= -f1); do
-  TOTAL=$((TOTAL + 1))
-  [ -n "${!var}" ] && FOUND=$((FOUND + 1))
-done
-echo "  📦  Found $FOUND/$TOTAL explicitly declared tools"
+# 分母必须是「声明的工具总数」，不能靠 set 反推 —— declare_tool 失败时会 unset，
+# 那些变量从环境消失，导致分母缩水成分子，永远显示 "N/N 全找到"（旧版 bug）。
+TOTAL=$_DECLARED_TOTAL
+FOUND=$_DECLARED_FOUND
+MISSING=$((TOTAL - FOUND))
+echo "  📦  Found $FOUND/$TOTAL declared tools"
+if [ "$MISSING" -gt 0 ]; then
+  echo "  ⚠️   $MISSING missing — downstream uses curl/bash fallbacks (see ⚠️ lines above)"
+fi
 echo ""
 echo "[hackprobe] Environment ready. Use \$HACKPROBE_NMAP, \$HACKPROBE_SQLMAP, etc."
 echo "[hackprobe] Missing tools will be handled gracefully with fallbacks."
+
+# 便携工具多目录时提示深度（见 README「工具发现」章节）
+if [ -n "${HACKPROBE_TOOL_BASE:-}" ]; then
+  echo "[hackprobe] TOOL_BASE=$HACKPROBE_TOOL_BASE  MAXDEPTH=${HACKPROBE_TOOL_MAXDEPTH:-3}"
+fi

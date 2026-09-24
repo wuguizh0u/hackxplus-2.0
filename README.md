@@ -276,15 +276,17 @@ bash install.sh
 
 ### 搜索优先级
 
-每个工具按 5 级优先级查找：
+每个工具按 3 级优先级查找，**先命中先返回**：
 
 ```
-1. $HACKPROBE_TOOL_BASE 下的子目录（gui_scan → gui_shouji → gui_other → gui_webshell）
-2. $HACKPROBE_NMAP_HOME（独立 nmap 安装）
-3. $HACKPROBE_TOOLS_ROOT（其他独立工具根目录）
-4. 系统 $PATH
-5. 常见安装位置（/usr/bin, /opt/homebrew/bin, ~/go/bin, ~/.local/bin）
+1. 系统 $PATH
+2. $HACKPROBE_TOOL_BASE 目录（递归，深度由 HACKPROBE_TOOL_MAXDEPTH 控制，默认 3）
+3. 常见安装位置（/usr/bin, /usr/local/bin, /opt/homebrew/bin, ~/go/bin, ~/.local/bin, ~/bin）
 ```
+
+> 命中后会跑**同名异工具校验**：已知 `httpx` 会撞名 —— Python 的 `httpx` HTTP 客户端
+> 与 ProjectDiscovery 的 `httpx` 探测工具同名。脚本用「帮助里是否含 `-json`」判定，
+> 假货会被跳过并打印 `[skip]` 提示，继续往下找。校验不通过不算命中。
 
 ### 高级定制（Windows 便携工具用户）
 
@@ -299,13 +301,27 @@ $env:HACKPROBE_TOOL_BASE = "C:/MyPortableTools"
 ```bash
 # Git Bash / MSYS2
 export HACKPROBE_TOOL_BASE="C:/MyPortableTools"
-
-# nmap 独立安装
-export HACKPROBE_NMAP_HOME="C:/nmap"
-
-# 其他独立工具目录
-export HACKPROBE_TOOLS_ROOT="D:/standalone-tools"
 ```
+
+**两个可调项：**
+
+```bash
+# ① 工具埋得深时调大搜索深度（默认 3，每多一层会多遍历文件，但通常仍是亚秒级）
+export HACKPROBE_TOOL_MAXDEPTH=5
+
+# ② 工具分散在多个目录时用分隔符并列
+#    Windows 用 ';'，Unix 用 ':'
+export HACKPROBE_TOOL_BASE="D:/1渗透tools/fox集成工具/tools;D:/standalone-tools"
+```
+
+**建议：把 BASE 指到真正放工具的目录，而不是整个便携包根目录。** 例如
+`D:/1渗透tools` 下的工具埋在 `fox集成工具/tools/gui_scan/` 里（第 4 层），
+直接指向 `D:/1渗透tools/fox集成工具/tools` 能让默认深度 3 正好够到，
+同时避免扫到集成包里重复的副本和内置 runtime。
+
+> 另外两个变量不由本脚本处理，但部分 wave 会直接引用：
+> `$HACKPROBE_TOOLS_ROOT`（如 `waves/wave1_recon.md` 用它定位 hostscan）。
+> `$HACKPROBE_NMAP_HOME` 曾被文档提及，但**代码中并未实现**。
 
 ### 添加自定义工具
 
