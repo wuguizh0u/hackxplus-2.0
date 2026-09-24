@@ -284,9 +284,18 @@ bash install.sh
 3. 常见安装位置（/usr/bin, /usr/local/bin, /opt/homebrew/bin, ~/go/bin, ~/.local/bin, ~/bin）
 ```
 
-> 命中后会跑**同名异工具校验**：已知 `httpx` 会撞名 —— Python 的 `httpx` HTTP 客户端
-> 与 ProjectDiscovery 的 `httpx` 探测工具同名。脚本用「帮助里是否含 `-json`」判定，
-> 假货会被跳过并打印 `[skip]` 提示，继续往下找。校验不通过不算命中。
+> 命中后会跑**同名异工具校验**，已知两个工具会撞名：
+>
+> | 工具 | 真身 | 冒牌 | 判据 |
+> |---|---|---|---|
+> | `httpx` | ProjectDiscovery httpx（探测） | Python `httpx` HTTP 客户端 | 帮助含 `-json` |
+> | `xray` | 长亭 xray（扫描器） | v2ray 代理套件的 `xray.exe` | 含 `Penetrates Everything` 即否决 |
+>
+> 冒牌货会被跳过并打印 `[skip]` 提示，继续往下找；校验不通过**不算命中**。
+>
+> ⚠️ 校验前会先做**可执行性预检**。因为执行失败时 shell 报错形如
+> `<path>: Permission denied` —— **path 里就含工具名**，会让 `*xray*` 这类
+> 特征匹配被自身路径污染而误判通过。跑不起来的直接否决，不进特征匹配。
 
 ### 高级定制（Windows 便携工具用户）
 

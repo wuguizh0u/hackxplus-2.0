@@ -21,10 +21,31 @@ esac
 # --- PATH setup (common locations) ---
 export PATH="$HOME/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH"
 
+# --- 可执行性预检 ---
+# ⚠️ 关键：校验工具身份时必须先确认「它真能跑」。
+# 失败时 shell 报错信息形如 "<path>: Permission denied"，而 **path 里就含工具名**，
+# 会让后续的 `*xray*` / `*-json*` 之类特征匹配被自己的路径污染而误判通过。
+# 所以先拦掉执行失败，再看特征。
+_tool_runs() {
+  local path="$1" out
+  out=$("$path" --version 2>&1) || out=$("$path" -version 2>&1) || \
+  out=$("$path" -h 2>&1)        || out=$("$path" --help 2>&1) || true
+  case "$out" in
+    *"Permission denied"*|*"No such file"*|*"command not found"*|*"cannot execute"*|*"not recognized"*)
+      return 1 ;;
+  esac
+  return 0
+}
+
 # --- Validation: reject same-name-different-tool collisions ---
 # 只对已知会撞名的工具校验，其余一律放行（避免误伤）。
 _tool_is_valid() {
   local name="$1" path="$2"
+  case "$name" in
+    httpx|xray)
+      _tool_runs "$path" || return 1   # 跑不起来的直接否掉，不进特征匹配
+      ;;
+  esac
   case "$name" in
     httpx)
       # 真 ProjectDiscovery httpx: 帮助含 -json / -version 打印 projectdiscovery 横幅
@@ -35,6 +56,26 @@ _tool_is_valid() {
       out=$("$path" -version 2>&1 || true)
       case "$out" in *rojectdiscovery*) return 0 ;; esac
       return 1
+      ;;
+    xray)
+      # ⚠️ xray 是最危险的撞名：v2ray 代理套件的 `xray.exe` 与长亭 xray 扫描器同名。
+      # 误用会把代理当成扫描器。真扫描器叫 xray_windows_amd64.exe。
+      #
+      # 必须是白名单校验：执行失败（Permission denied / 被 AV 拦截）**不等于**通过。
+      # 黑名单写法（默认放行）会让不可执行的文件混进来 —— 已踩过。
+      local out
+      out=$("$path" -version 2>&1 || true)
+      case "$out" in *"Penetrates Everything"*) return 1 ;; esac  # v2ray 代理，明确拒绝
+      # 长亭 xray 特征：输出含 "xray"（大小写不限）或版本号形态
+      case "$out" in
+        *xray*|*Xray*)
+          case "$out" in
+            *xpired*|*license*) return 1 ;;   # license 过期，等于不可用
+          esac
+          return 0
+          ;;
+      esac
+      return 1   # 执行失败或输出不可识别 → 一律不放行
       ;;
   esac
   return 0
@@ -135,6 +176,9 @@ declare_tool sqlmap
 declare_tool dalfox
 declare_tool trufflehog
 declare_tool feroxbuster
+declare_tool fscan     # 内网综合扫描（端口/服务/弱口令）
+declare_tool afrog     # 漏洞扫描（POC 型，nuclei 的替代）
+declare_tool xray      # 长亭被动扫描器（⚠️ 可能与 v2ray 的 xray 撞名，已加校验）
 
 # ============================================================
 # CONTENT DISCOVERY
